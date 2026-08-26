@@ -18,6 +18,6 @@ def get_by_id_active(db: Session, onboarding_id: uuid.UUID) -> Onboarding | None
 
 def create(db: Session, onboarding: Onboarding) -> Onboarding:
     db.add(onboarding)
-    db.commit()
+    db.flush()
     db.refresh(onboarding)
     return onboarding
