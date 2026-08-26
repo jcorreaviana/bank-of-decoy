@@ -37,6 +37,103 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
 
+  onboarding-service:
+    build: ./onboarding-service
+    container_name: bank-of-decoy-onboarding-service
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      SERVICE_NAME: onboarding-service
+      PORT: "8001"
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql://bank:bank@postgres:5432/onboarding
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  account-service:
+    build: ./account-service
+    container_name: bank-of-decoy-account-service
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      SERVICE_NAME: account-service
+      PORT: "8002"
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql://bank:bank@postgres:5432/account
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pix-key-service:
+    build: ./pix-key-service
+    container_name: bank-of-decoy-pix-key-service
+    restart: unless-stopped
+    ports:
+      - "8003:8003"
+    environment:
+      SERVICE_NAME: pix-key-service
+      PORT: "8003"
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql://bank:bank@postgres:5432/pix_key
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  transaction-service:
+    build: ./transaction-service
+    container_name: bank-of-decoy-transaction-service
+    restart: unless-stopped
+    ports:
+      - "8004:8004"
+    environment:
+      SERVICE_NAME: transaction-service
+      PORT: "8004"
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql://bank:bank@postgres:5432/transaction
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:v3.14.0
+    container_name: bank-of-decoy-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - onboarding-service
+      - account-service
+      - pix-key-service
+      - transaction-service
+
+  grafana:
+    image: grafana/grafana:13.2.0
+    container_name: bank-of-decoy-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
 volumes:
   postgres_data:
   kafka_data:
+  prometheus_data:
+  grafana_data:
