@@ -115,6 +115,47 @@ def test_get_onboarding_not_found_returns_404() -> None:
     assert body["error_code"] == "ONBOARDING_NOT_FOUND"
 
 
+# --- endpoint interno (issue #10): uso exclusivo servico-a-servico,
+# retorna o cpf ainda criptografado (ver app/core/crypto.py). ---
+
+
+def test_get_onboarding_internal_returns_encrypted_cpf() -> None:
+    from app.core.crypto import decrypt_value
+
+    client = TestClient(app)
+    cpf = "77788899900"
+    created = client.post("/v1/onboarding", json=_valid_payload(cpf=cpf)).json()
+
+    response = client.get(f"/v1/onboarding/{created['id']}/internal")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == created["id"]
+    assert body["cpf"] != cpf
+    assert decrypt_value(body["cpf"]) == cpf
+    assert body["status"] == "aprovado"
+    assert "risco_cadastro" in body
+
+
+def test_get_onboarding_internal_not_found_returns_404() -> None:
+    client = TestClient(app)
+
+    response = client.get(f"/v1/onboarding/{uuid.uuid4()}/internal")
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "ONBOARDING_NOT_FOUND"
+
+
+def test_get_onboarding_publico_nao_expoe_cpf() -> None:
+    client = TestClient(app)
+    created = client.post("/v1/onboarding", json=_valid_payload(cpf="66655544433")).json()
+
+    response = client.get(f"/v1/onboarding/{created['id']}")
+
+    assert response.status_code == 200
+    assert "cpf" not in response.json()
+
+
 # --- classificacao de risco (issue #4): a classificacao roda de forma
 # sincrona logo apos o POST, entao por essas o GET ja reflete o resultado. ---
 
