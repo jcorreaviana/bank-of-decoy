@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: onboarding-service
+    static_configs:
+      - targets: ["onboarding-service:8001"]
+
+  - job_name: account-service
+    static_configs:
+      - targets: ["account-service:8002"]
+
+  - job_name: pix-key-service
+    static_configs:
+      - targets: ["pix-key-service:8003"]
+
+  - job_name: transaction-service
+    static_configs:
+      - targets: ["transaction-service:8004"]
