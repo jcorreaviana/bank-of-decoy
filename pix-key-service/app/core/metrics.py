@@ -38,15 +38,16 @@ def register_db_pool_gauge(engine: Optional[Engine]) -> None:
 class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start = time.perf_counter()
-        response = await call_next(request)
-        duration = time.perf_counter() - start
+        status_code = "500"
+        try:
+            response = await call_next(request)
+            status_code = str(response.status_code)
+            return response
+        finally:
+            duration = time.perf_counter() - start
+            route = request.scope.get("route")
+            route_path = route.path if route is not None else request.url.path
+            method = request.method
 
-        route = request.scope.get("route")
-        route_path = route.path if route is not None else request.url.path
-        method = request.method
-        status_code = str(response.status_code)
-
-        http_requests_total.labels(route=route_path, method=method, status_code=status_code).inc()
-        http_request_duration_seconds.labels(route=route_path, method=method).observe(duration)
-
-        return response
+            http_requests_total.labels(route=route_path, method=method, status_code=status_code).inc()
+            http_request_duration_seconds.labels(route=route_path, method=method).observe(duration)
