@@ -9,6 +9,7 @@ class Settings:
     log_level: str
     database_url: str
     kafka_bootstrap_servers: str
+    onboarding_service_url: str
 
 
 def get_settings() -> Settings:
@@ -18,4 +19,5 @@ def get_settings() -> Settings:
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         database_url=os.environ.get("DATABASE_URL", ""),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", ""),
+        onboarding_service_url=os.environ.get("ONBOARDING_SERVICE_URL", ""),
     )
