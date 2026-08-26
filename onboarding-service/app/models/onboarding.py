@@ -5,22 +5,28 @@ from sqlalchemy import Date, DateTime, Index, Numeric, String, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.crypto import EncryptedString
 from app.core.db import Base
 
 
 class Onboarding(Base):
     __tablename__ = "onboardings"
     __table_args__ = (
+        # Fernet nao e deterministico (o mesmo CPF gera ciphertexts
+        # diferentes a cada gravacao), entao a unicidade nao pode ser
+        # garantida sobre a coluna `cpf` criptografada - ela vive no
+        # `cpf_hash` (HMAC-SHA256 deterministico, ver app/core/crypto.py).
         Index(
-            "ix_onboardings_cpf_unique_not_deleted",
-            "cpf",
+            "ix_onboardings_cpf_hash_unique_not_deleted",
+            "cpf_hash",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    cpf: Mapped[str] = mapped_column(String, nullable=False)
+    cpf: Mapped[str] = mapped_column(EncryptedString, nullable=False)
+    cpf_hash: Mapped[str] = mapped_column(String, nullable=False)
     nome: Mapped[str] = mapped_column(String, nullable=False)
     data_nascimento: Mapped[date] = mapped_column(Date, nullable=False)
     email: Mapped[str] = mapped_column(String, nullable=False)
