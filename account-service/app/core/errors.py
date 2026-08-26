@@ -36,6 +36,30 @@ def _error_response(status_code: int, error_code: str, message: str, field: str 
     )
 
 
+class OnboardingNotFoundError(DomainError):
+    error_code = "ONBOARDING_NOT_FOUND"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("Onboarding nao encontrado.")
+
+
+class OnboardingNotApprovedError(DomainError):
+    error_code = "ONBOARDING_NOT_APPROVED"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("Onboarding ainda nao foi aprovado.")
+
+
+class AccountAlreadyExistsError(DomainError):
+    error_code = "ACCOUNT_ALREADY_EXISTS"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("Conta ja existe para este onboarding.")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
