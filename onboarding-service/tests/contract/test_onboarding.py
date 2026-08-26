@@ -1,3 +1,4 @@
+import os
 import uuid
 
 import pytest
@@ -10,8 +11,8 @@ from app.main import app
 settings = get_settings()
 
 pytestmark = pytest.mark.skipif(
-    not settings.database_url,
-    reason="DATABASE_URL nao configurada - teste de contrato do onboarding requer banco real.",
+    not settings.database_url or not os.environ.get("CPF_ENCRYPTION_KEY"),
+    reason="DATABASE_URL/CPF_ENCRYPTION_KEY nao configuradas - teste de contrato do onboarding requer banco real.",
 )
 
 
