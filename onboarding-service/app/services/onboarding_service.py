@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.crypto import compute_blind_index
 from app.core.errors import CpfAlreadyRegisteredError, OnboardingNotFoundError
 from app.core.logging import get_logger
 from app.models import Onboarding
@@ -41,6 +42,7 @@ def create_onboarding(db: Session, payload: OnboardingCreateRequest) -> Onboardi
 
     onboarding = Onboarding(
         cpf=payload.cpf,
+        cpf_hash=compute_blind_index(payload.cpf),
         nome=payload.nome,
         data_nascimento=payload.data_nascimento,
         email=payload.email,
