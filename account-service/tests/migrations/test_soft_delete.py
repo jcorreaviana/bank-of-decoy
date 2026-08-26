@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -11,8 +12,8 @@ from app.models import Account
 settings = get_settings()
 
 pytestmark = pytest.mark.skipif(
-    not settings.database_url,
-    reason="DATABASE_URL nao configurada - teste de migration requer banco real.",
+    not settings.database_url or not os.environ.get("CPF_ENCRYPTION_KEY"),
+    reason="DATABASE_URL/CPF_ENCRYPTION_KEY nao configuradas - teste de migration requer banco real.",
 )
 
 
