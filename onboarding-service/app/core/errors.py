@@ -36,6 +36,22 @@ def _error_response(status_code: int, error_code: str, message: str, field: str 
     )
 
 
+class CpfAlreadyRegisteredError(DomainError):
+    error_code = "CPF_ALREADY_REGISTERED"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("CPF ja possui onboarding registrado.", field="cpf")
+
+
+class OnboardingNotFoundError(DomainError):
+    error_code = "ONBOARDING_NOT_FOUND"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("Onboarding nao encontrado.")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
