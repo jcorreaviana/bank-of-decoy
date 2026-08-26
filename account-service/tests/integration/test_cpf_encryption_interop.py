@@ -90,6 +90,7 @@ def test_account_service_decrypts_internal_cpf_and_stores_it_encrypted() -> None
             id=uuid.uuid4(),
             onboarding_id=uuid.UUID(onboarding_id),
             cpf=payload["cpf"],
+            tipo_conta="corrente",
             status="ativa",
             risco_score=payload["risco_cadastro"]["score"],
             risco_sinais=payload["risco_cadastro"]["sinais"],

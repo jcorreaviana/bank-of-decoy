@@ -24,6 +24,7 @@ def test_soft_delete_does_not_remove_row_physically() -> None:
             id=uuid.uuid4(),
             onboarding_id=uuid.uuid4(),
             cpf="33333333333",
+            tipo_conta="corrente",
             status="ativa",
         )
         session.add(account)
