@@ -55,6 +55,26 @@ Consulta o estado atual de um onboarding, incluindo o resultado da classificaç�
 
 Formato de erro conforme [error-handling.md](../tech/error-handling.md).
 
+### `GET /v1/onboarding/{id}/internal` (onboarding-service) — uso interno, não é contrato público
+
+Endpoint de comunicação **serviço-a-serviço**, não documentado/exposto como API pública do produto. Existe apenas para que outro serviço interno (hoje, o `account-service` — ver [05-account-post-sincrono.md](05-account-post-sincrono.md)) obtenha o `cpf`, que o `GET /v1/onboarding/{id}` público deliberadamente omite por ser PII. Diferente do endpoint público:
+
+- Retorna os mesmos campos do `GET` público **mais** `cpf`.
+- `cpf` trafega **criptografado** (ver [10-criptografia-cpf.md](10-criptografia-cpf.md)) — o onboarding-service não decifra para servir esse endpoint; quem consome decifra com a chave simétrica compartilhada.
+- Sem autenticação nesta fase, mesma simplificação de escopo de [security.md](../tech/security.md) — em produção real exigiria autenticação de serviço (mTLS ou API key interna com rotação).
+
+- `200 OK`:
+  ```json
+  {
+    "id": "UUID",
+    "cpf": "string (criptografado)",
+    "status": "em_analise|aprovado|reprovado_qualidade|reprovado_fraude",
+    "risco_cadastro": { "score": "number (0-100)|null", "sinais": ["string", "..."] },
+    "created_at": "timestamp"
+  }
+  ```
+- `404 Not Found`: mesma regra do `GET` público. `error_code: "ONBOARDING_NOT_FOUND"`.
+
 ## Critério de aceite
 - [ ] Request válido retorna `201` com `id` (UUID) e `status: "em_analise"`.
 - [ ] Registro é persistido em `onboardings` com todos os campos do payload (ver schema em [02-modelo-dados.md](02-modelo-dados.md)).
@@ -65,7 +85,8 @@ Formato de erro conforme [error-handling.md](../tech/error-handling.md).
 - [ ] CPF e documento não trafegam em query string em nenhum momento do fluxo.
 - [ ] `GET /v1/onboarding/{id}` retorna `200` com `risco_cadastro: { score, sinais }` preenchido após a classificação rodar.
 - [ ] `GET /v1/onboarding/{id}` para id inexistente ou deletado retorna `404` com `error_code: "ONBOARDING_NOT_FOUND"`.
-- [ ] Teste de contrato cobre: caminho feliz do `POST` e do `GET`, `400` (campo ausente e formato inválido), `409` e `404`.
+- [ ] `GET /v1/onboarding/{id}/internal` retorna `200` com o `cpf` criptografado (nunca em texto puro no payload) além dos campos do `GET` público, e `404` nas mesmas condições.
+- [ ] Teste de contrato cobre: caminho feliz do `POST`, do `GET` público e do `GET` interno, `400` (campo ausente e formato inválido), `409` e `404`.
 
 ## Specs técnicas aplicáveis
 - [api-conventions.md](../tech/api-conventions.md) — prefixo `/v1/`, plural, status codes.
