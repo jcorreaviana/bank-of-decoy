@@ -1,3 +1,4 @@
+import os
 import uuid
 from datetime import date, datetime, timezone
 
@@ -6,13 +7,14 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.crypto import compute_blind_index
 from app.models import Onboarding
 
 settings = get_settings()
 
 pytestmark = pytest.mark.skipif(
-    not settings.database_url,
-    reason="DATABASE_URL nao configurada - teste de migration requer banco real.",
+    not settings.database_url or not os.environ.get("CPF_ENCRYPTION_KEY"),
+    reason="DATABASE_URL/CPF_ENCRYPTION_KEY nao configuradas - teste de migration requer banco real.",
 )
 
 
@@ -22,6 +24,7 @@ def test_soft_delete_does_not_remove_row_physically() -> None:
         onboarding = Onboarding(
             id=uuid.uuid4(),
             cpf="22222222222",
+            cpf_hash=compute_blind_index("22222222222"),
             nome="Teste Soft Delete",
             data_nascimento=date(1990, 1, 1),
             email="softdelete@example.com",
