@@ -42,3 +42,13 @@ class OnboardingDetailResponse(BaseModel):
     status: str
     risco_cadastro: RiscoCadastro
     created_at: datetime
+
+
+class OnboardingInternalResponse(BaseModel):
+    """Uso exclusivo servico-a-servico (ver GET /v1/onboarding/{id}/internal)."""
+
+    id: uuid.UUID
+    cpf: str
+    status: str
+    risco_cadastro: RiscoCadastro
+    created_at: datetime
