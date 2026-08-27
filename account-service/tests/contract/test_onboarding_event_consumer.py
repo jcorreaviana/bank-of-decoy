@@ -11,6 +11,8 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
+from test_safety import require_disposable_database
+
 from app.core.config import get_settings
 from app.core.crypto import encrypt_value
 from app.services.onboarding_event_consumer import process_onboarding_aprovado_envelope
@@ -25,6 +27,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _clean_tables():
+    require_disposable_database(settings.database_url)
     engine = create_engine(settings.database_url)
     with engine.begin() as connection:
         connection.execute(text("TRUNCATE accounts, processed_events"))
