@@ -1,0 +1,87 @@
+"""Aplica os 4 thresholds do agente de bug ja definidos em
+docs/escopo-arquitetura.md e specs/business/13-agente-preditivo-registro.md:
+
+- taxa de erro > 5% em 5 min por servico
+- latencia p95 > 2x mediana historica
+- saturacao de pool de conexao > 80%
+- log CRITICAL/ERROR repetido 3+ vezes em 5 min com a mesma mensagem
+"""
+
+from dataclasses import dataclass
+
+from agent_preditivo.logs_client import LogEntry, count_repeated_critical_or_error, fetch_logs
+from agent_preditivo.prometheus_client import GoldenSignals, fetch_golden_signals
+
+LIMIAR_TAXA_ERRO = 0.05
+LIMIAR_LATENCIA_MULTIPLICADOR = 2.0
+LIMIAR_SATURACAO_POOL = 0.80
+LIMIAR_LOG_REPETIDO = 3
+
+
+@dataclass(frozen=True)
+class BugSignal:
+    service: str
+    signal_type: str
+    """erro_alto | latencia_alta | saturacao_pool | log_critico_repetido."""
+    detail: str
+
+
+def check_taxa_erro(signals: GoldenSignals) -> BugSignal | None:
+    if signals.taxa_erro > LIMIAR_TAXA_ERRO:
+        return BugSignal(
+            service=signals.service,
+            signal_type="erro_alto",
+            detail=f"taxa de erro {signals.taxa_erro:.2%} > {LIMIAR_TAXA_ERRO:.0%} em 5 min",
+        )
+    return None
+
+
+def check_latencia(signals: GoldenSignals) -> BugSignal | None:
+    if signals.latencia_p95_atual is None or not signals.latencia_mediana_historica:
+        return None
+    if signals.latencia_p95_atual > signals.latencia_mediana_historica * LIMIAR_LATENCIA_MULTIPLICADOR:
+        return BugSignal(
+            service=signals.service,
+            signal_type="latencia_alta",
+            detail=(
+                f"p95 atual {signals.latencia_p95_atual:.3f}s > "
+                f"{LIMIAR_LATENCIA_MULTIPLICADOR}x a mediana historica "
+                f"({signals.latencia_mediana_historica:.3f}s)"
+            ),
+        )
+    return None
+
+
+def check_saturacao_pool(signals: GoldenSignals) -> BugSignal | None:
+    if signals.saturacao_pool > LIMIAR_SATURACAO_POOL:
+        return BugSignal(
+            service=signals.service,
+            signal_type="saturacao_pool",
+            detail=f"saturacao de pool {signals.saturacao_pool:.0%} > {LIMIAR_SATURACAO_POOL:.0%}",
+        )
+    return None
+
+
+def check_log_repetido(service: str, entries: list[LogEntry]) -> BugSignal | None:
+    counts = count_repeated_critical_or_error(entries)
+    for key, count in counts.items():
+        if count >= LIMIAR_LOG_REPETIDO:
+            return BugSignal(
+                service=service,
+                signal_type="log_critico_repetido",
+                detail=f"'{key}' repetido {count}x em 5 min",
+            )
+    return None
+
+
+def detect_bugs_for_service(service: str, prometheus_url: str | None = None) -> list[BugSignal]:
+    signals = fetch_golden_signals(service, prometheus_url=prometheus_url)
+    entries = fetch_logs(service, since="5m")
+
+    found = [
+        check_taxa_erro(signals),
+        check_latencia(signals),
+        check_saturacao_pool(signals),
+        check_log_repetido(service, entries),
+    ]
+    return [signal for signal in found if signal is not None]
