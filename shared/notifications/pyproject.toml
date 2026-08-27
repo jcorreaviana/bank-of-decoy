@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "notifications"
+version = "0.1.0"
+description = "Notificacoes Discord (webhook de entrada) para eventos dos agentes - compartilhado entre agent-preditivo e agent-local (specs/business/20-notificacoes-discord-agentes.md)."
+requires-python = ">=3.12"
+dependencies = ["httpx"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["notifications*"]
