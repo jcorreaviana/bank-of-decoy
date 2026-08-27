@@ -10,6 +10,7 @@ class Settings:
     database_url: str
     kafka_bootstrap_servers: str
     account_service_url: str
+    pix_key_service_url: str
 
 
 def get_settings() -> Settings:
@@ -20,4 +21,5 @@ def get_settings() -> Settings:
         database_url=os.environ.get("DATABASE_URL", ""),
         kafka_bootstrap_servers=os.environ.get("KAFKA_BOOTSTRAP_SERVERS", ""),
         account_service_url=os.environ.get("ACCOUNT_SERVICE_URL", ""),
+        pix_key_service_url=os.environ.get("PIX_KEY_SERVICE_URL", ""),
     )

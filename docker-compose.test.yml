@@ -107,10 +107,13 @@ services:
       DATABASE_URL: postgresql://bank:bank@postgres:5432/transaction
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       ACCOUNT_SERVICE_URL: http://account-service:8002
+      PIX_KEY_SERVICE_URL: http://pix-key-service:8003
     depends_on:
       postgres:
         condition: service_healthy
       account-service:
+        condition: service_started
+      pix-key-service:
         condition: service_started
 
   prometheus:

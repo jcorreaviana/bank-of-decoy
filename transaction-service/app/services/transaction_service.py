@@ -2,12 +2,13 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.core.errors import AccountNotActiveError
+from app.core.errors import AccountNotActiveError, PixKeyDestinoInativaError, PixKeyDestinoNotFoundError
 from app.core.logging import get_logger, get_trace_id
 from app.models import Transaction
 from app.repositories import transaction_repository
 from app.schemas.transaction import TransactionCreateRequest
 from app.services.account_client import AccountNotFoundUpstreamError, fetch_account
+from app.services.pix_key_client import PixKeyDestinoNotFoundUpstreamError, fetch_pix_key_by_valor
 from app.services.transaction_risk import evaluate_transaction_risk
 
 logger = get_logger(__name__)
@@ -33,6 +34,26 @@ def create_transaction(db: Session, payload: TransactionCreateRequest) -> Transa
             extra={"context": {"account_id": str(payload.account_id), "account_status": account["status"]}},
         )
         raise AccountNotActiveError()
+
+    logger.info(
+        "Consultando pix-key-service (chamada sincrona) para validar chave de destino.",
+        extra={"context": {"pix_key_destino": payload.pix_key_destino}},
+    )
+    try:
+        pix_key_destino = fetch_pix_key_by_valor(payload.pix_key_destino, trace_id=get_trace_id())
+    except PixKeyDestinoNotFoundUpstreamError:
+        logger.warning(
+            "Chave de destino inexistente ao tentar criar transacao.",
+            extra={"context": {"pix_key_destino": payload.pix_key_destino}},
+        )
+        raise PixKeyDestinoNotFoundError()
+
+    if not pix_key_destino["ativa"]:
+        logger.warning(
+            "Tentativa de transacao para chave de destino cancelada.",
+            extra={"context": {"pix_key_destino": payload.pix_key_destino}},
+        )
+        raise PixKeyDestinoInativaError()
 
     agora = datetime.now(timezone.utc)
     risk = evaluate_transaction_risk(db, payload, payload.account_id, agora=agora)

@@ -44,6 +44,22 @@ class AccountNotActiveError(DomainError):
         super().__init__("Conta de origem nao esta ativa.")
 
 
+class PixKeyDestinoNotFoundError(DomainError):
+    error_code = "PIX_KEY_DESTINO_NOT_FOUND"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("Chave PIX de destino nao encontrada.")
+
+
+class PixKeyDestinoInativaError(DomainError):
+    error_code = "PIX_KEY_DESTINO_INATIVA"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("Chave PIX de destino foi cancelada.")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
