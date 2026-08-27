@@ -36,6 +36,22 @@ def _error_response(status_code: int, error_code: str, message: str, field: str 
     )
 
 
+class PixKeyAlreadyRegisteredError(DomainError):
+    error_code = "PIX_KEY_ALREADY_REGISTERED"
+    status_code = 409
+
+    def __init__(self) -> None:
+        super().__init__("Chave PIX ja registrada.")
+
+
+class PixKeyNotFoundError(DomainError):
+    error_code = "PIX_KEY_NOT_FOUND"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("Chave PIX nao encontrada.")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
