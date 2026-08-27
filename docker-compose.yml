@@ -51,7 +51,12 @@ services:
       - kafka_data:/var/lib/kafka/data
 
   onboarding-service:
-    build: ./onboarding-service
+    # Contexto = raiz do monorepo (nao ./onboarding-service) - o build
+    # precisa alcancar shared/risk_engine, dependencia local editable
+    # (issue #8). Dockerfile ajustado de acordo (COPY com prefixo).
+    build:
+      context: .
+      dockerfile: onboarding-service/Dockerfile
     container_name: bank-of-decoy-onboarding-service
     restart: unless-stopped
     ports:
@@ -105,7 +110,11 @@ services:
         condition: service_healthy
 
   transaction-service:
-    build: ./transaction-service
+    # Mesmo motivo do onboarding-service acima: contexto = raiz do
+    # monorepo, para alcancar shared/risk_engine (issue #8).
+    build:
+      context: .
+      dockerfile: transaction-service/Dockerfile
     container_name: bank-of-decoy-transaction-service
     restart: unless-stopped
     ports:
