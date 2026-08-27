@@ -7,7 +7,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.core.db import Base
-from app.models import Account  # noqa: F401 - registers the model on Base.metadata
+from app.models import Account, ProcessedEvent  # noqa: F401 - registers the models on Base.metadata
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
