@@ -8,3 +8,4 @@ __pycache__/
 htmlcov/
 *.egg-info/
 scripts/*.log
+rag_index/
