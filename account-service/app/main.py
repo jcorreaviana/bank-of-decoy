@@ -1,8 +1,13 @@
+import threading
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.core.config import get_settings
 from app.core.db import engine
 from app.core.errors import register_exception_handlers
+from app.core.kafka_consumer import run_onboarding_aprovado_consumer
 from app.core.logging import RequestLoggingMiddleware, configure_logging
 from app.core.metrics import MetricsMiddleware, register_db_pool_gauge
 from app.routers import account, health, metrics
@@ -10,7 +15,23 @@ from app.routers import account, health, metrics
 settings = get_settings()
 configure_logging(settings.service_name, settings.log_level)
 
-app = FastAPI(title=settings.service_name)
+_consumer_stop_event = threading.Event()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+    consumer_thread = threading.Thread(
+        target=run_onboarding_aprovado_consumer, args=(_consumer_stop_event,), daemon=True
+    )
+    consumer_thread.start()
+    try:
+        yield
+    finally:
+        _consumer_stop_event.set()
+        consumer_thread.join(timeout=10)
+
+
+app = FastAPI(title=settings.service_name, lifespan=lifespan)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(MetricsMiddleware)
 register_exception_handlers(app)

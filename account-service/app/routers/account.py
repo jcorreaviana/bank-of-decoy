@@ -12,6 +12,13 @@ router = APIRouter(prefix="/v1/accounts", tags=["accounts"])
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=AccountCreateResponse)
 def post_account(payload: AccountCreateRequest, db: Session = Depends(get_db)) -> AccountCreateResponse:
+    """Rota OPERACIONAL de reprocessamento manual - desde a issue #7, o
+    funil principal cria a conta automaticamente ao consumir o evento
+    Kafka `onboarding.aprovado` (ver app/services/onboarding_event_consumer.py).
+    Esta rota so deve ser usada para reprocessar manualmente um onboarding
+    aprovado cujo evento tenha se perdido/corrompido - ela repete a mesma
+    checagem de aprovacao do onboarding (ver docstring de `create_account`),
+    nunca cria conta sem confirmar `status == "aprovado"`."""
     account = create_account(db, payload)
     return AccountCreateResponse(id=account.id, status=account.status, created_at=account.created_at)
 
