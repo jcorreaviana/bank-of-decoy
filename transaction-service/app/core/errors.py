@@ -36,6 +36,14 @@ def _error_response(status_code: int, error_code: str, message: str, field: str 
     )
 
 
+class AccountNotActiveError(DomainError):
+    error_code = "ACCOUNT_NOT_ACTIVE"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("Conta de origem nao esta ativa.")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
