@@ -71,15 +71,44 @@ def test_register_bug_cria_issue_e_registra_signal_quando_novo() -> None:
 
     with (
         patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
-        patch("agent_preditivo.registration_agent.create_issue", return_value=42) as mock_create,
+        patch(
+            "agent_preditivo.registration_agent.create_issue",
+            return_value=(42, "https://github.com/x/y/issues/42"),
+        ) as mock_create,
         patch("agent_preditivo.registration_agent.agent_ops_db.register_signal") as mock_register,
         patch("agent_preditivo.registration_agent.chat", return_value="SINAL_QUE_DISPAROU: x\nEVIDENCIA: y"),
+        patch("agent_preditivo.registration_agent.notify_issue_created") as mock_notify,
     ):
         result = register_bug(signal)
 
     assert result == 42
     mock_create.assert_called_once()
     mock_register.assert_called_once_with("erro_alto", "transaction-service", issue_number=42)
+    mock_notify.assert_called_once_with(42, "[BUG] erro_alto em transaction-service", "bug", "https://github.com/x/y/issues/42")
+
+
+def test_register_opportunity_cria_issue_e_notifica_quando_gap() -> None:
+    finding = OpportunityFinding(
+        scenario_name="cenario_x", veredito="GAP", racional="viola regra Y", observed_behavior="Z", rule_chunks=[]
+    )
+
+    with (
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.create_issue",
+            return_value=(99, "https://github.com/x/y/issues/99"),
+        ) as mock_create,
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal"),
+        patch(
+            "agent_preditivo.registration_agent.chat", return_value="RESUMO: lacuna\nCONTRATO_AFETADO: regra Y"
+        ),
+        patch("agent_preditivo.registration_agent.notify_issue_created") as mock_notify,
+    ):
+        result = register_opportunity(finding, scenario_path=None)
+
+    assert result == 99
+    mock_create.assert_called_once()
+    mock_notify.assert_called_once_with(99, "[FASE 3] Oportunidade: cenario_x", "business-story", "https://github.com/x/y/issues/99")
 
 
 def test_register_opportunity_nao_cria_issue_quando_sem_gap() -> None:

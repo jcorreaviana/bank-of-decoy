@@ -13,6 +13,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from notifications import notify_issue_created
+
 from agent_preditivo import agent_ops_db
 from agent_preditivo.bug_detection import BugSignal
 from agent_preditivo.llm import chat
@@ -130,7 +132,7 @@ Nenhuma.
     return title, body
 
 
-def create_issue(title: str, body: str, label: str) -> int:
+def create_issue(title: str, body: str, label: str) -> tuple[int, str]:
     result = subprocess.run(
         ["gh", "issue", "create", "--title", title, "--body", body, "--label", label],
         capture_output=True,
@@ -139,7 +141,8 @@ def create_issue(title: str, body: str, label: str) -> int:
         cwd=_REPO_ROOT,
     )
     url = result.stdout.strip().splitlines()[-1]
-    return int(url.rstrip("/").rsplit("/", 1)[-1])
+    issue_number = int(url.rstrip("/").rsplit("/", 1)[-1])
+    return issue_number, url
 
 
 def register_bug(signal: BugSignal) -> int | None:
@@ -148,8 +151,9 @@ def register_bug(signal: BugSignal) -> int | None:
         return None  # já sinalizado e em aberto - dedup, nao repete a acao
 
     title, body = format_bug_issue(signal)
-    issue_number = create_issue(title, body, "bug")
+    issue_number, url = create_issue(title, body, "bug")
     agent_ops_db.register_signal(signal.signal_type, signal.service, issue_number=issue_number)
+    notify_issue_created(issue_number, title, "bug", url)
     return issue_number
 
 
@@ -162,6 +166,7 @@ def register_opportunity(finding: OpportunityFinding, scenario_path: Path | None
         return None
 
     title, body = format_opportunity_issue(finding, scenario_path)
-    issue_number = create_issue(title, body, "business-story")
+    issue_number, url = create_issue(title, body, "business-story")
     agent_ops_db.register_signal(finding.scenario_name, "oportunidade", issue_number=issue_number)
+    notify_issue_created(issue_number, title, "business-story", url)
     return issue_number

@@ -6,12 +6,18 @@ a cada `PREDICTIVE_AGENT_INTERVAL_SECONDS` (default 300)
 """
 
 import argparse
+import logging
 import time
+import traceback
+
+from notifications import notify_agent_error
 
 from agent_preditivo.bug_detection import detect_bugs_for_service
 from agent_preditivo.config import get_settings
 from agent_preditivo.opportunity_detection import run_opportunity_battery, save_scenario_journey
 from agent_preditivo.registration_agent import register_bug, register_opportunity
+
+logger = logging.getLogger(__name__)
 
 
 def run_bug_cycle() -> list[int]:
@@ -39,9 +45,22 @@ def run_opportunity_cycle(api_base_urls: dict[str, str] | None = None) -> list[i
 
 
 def run_cycle(include_opportunity: bool = True) -> None:
-    run_bug_cycle()
-    if include_opportunity:
-        run_opportunity_cycle()
+    """Erro nao tratado em um ciclo (Ollama indisponivel, falha de rede,
+    etc.) e notificado e logado, mas NAO derruba o processo - um daemon de
+    polling deve sobreviver a falhas transitorias e tentar de novo no
+    proximo ciclo; a notificacao e o mecanismo de alerta para intervencao
+    humana, nao um crash (specs/business/20-notificacoes-discord-agentes.md,
+    evento 4)."""
+    try:
+        run_bug_cycle()
+        if include_opportunity:
+            run_opportunity_cycle()
+    except Exception as exc:
+        logger.error(
+            "Erro nao tratado no ciclo do agent-preditivo.",
+            extra={"context": {"stack_trace": traceback.format_exc()}},
+        )
+        notify_agent_error("agent-preditivo", str(exc), context={"traceback": traceback.format_exc()[-500:]})
 
 
 def main() -> None:
