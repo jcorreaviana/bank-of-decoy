@@ -102,7 +102,7 @@ Este é o núcleo mais complexo e mais próximo do seu estudo de agentes.
 - Roda testes localmente
 - Calcula um **score de risco de subida** baseado em impacto (quantos serviços afetados, criticidade do caminho, cobertura de teste da mudança)
 
-**Gate de decisão**: com base no score de risco, decide se sobe autonomamente ou aciona aprovação humana. Esse é o ponto mais interessant para portfólio: você define e justifica o critério (ex. score abaixo de X = autônomo, acima = humano), documentando o raciocínio como fez com o LDM moat argument
+**Gate de decisão**: com base no score de risco, decide se sobe autonomamente ou aciona aprovação humana. Esse é o ponto mais interessante para portfólio: você define e justifica o critério (ex. score abaixo de X = autônomo, acima = humano), documentando o raciocínio como fez com o LDM moat argument
 
 ## Fases sugeridas
 
