@@ -60,6 +60,14 @@ class AccountAlreadyExistsError(DomainError):
         super().__init__("Conta ja existe para este onboarding.")
 
 
+class AccountNotFoundError(DomainError):
+    error_code = "ACCOUNT_NOT_FOUND"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("Conta nao encontrada.")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
