@@ -74,7 +74,13 @@ services:
         condition: service_healthy
 
   account-service:
-    build: ./account-service
+    # Contexto = raiz do monorepo (nao ./account-service) - o build
+    # precisa alcancar shared/test_safety, dependencia local editable
+    # (specs/tech/testing.md). Dockerfile ajustado de acordo (COPY com
+    # prefixo), mesmo padrao ja usado por onboarding-service/transaction-service.
+    build:
+      context: .
+      dockerfile: account-service/Dockerfile
     container_name: bank-of-decoy-account-service
     restart: unless-stopped
     ports:
@@ -94,7 +100,11 @@ services:
         condition: service_started
 
   pix-key-service:
-    build: ./pix-key-service
+    # Mesmo motivo do account-service acima: contexto = raiz do monorepo,
+    # para alcancar shared/test_safety.
+    build:
+      context: .
+      dockerfile: pix-key-service/Dockerfile
     container_name: bank-of-decoy-pix-key-service
     restart: unless-stopped
     ports:

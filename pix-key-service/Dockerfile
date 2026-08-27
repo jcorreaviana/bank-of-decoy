@@ -2,10 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Build context e a raiz do monorepo (nao este diretorio) - necessario
+# para incluir shared/test_safety, dependencia local editable instalada
+# via requirements.txt (ver docker-compose.yml, specs/tech/testing.md).
+COPY shared/test_safety /shared/test_safety
+COPY pix-key-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY pix-key-service/app ./app
 
 ENV PORT=8003
 EXPOSE 8003

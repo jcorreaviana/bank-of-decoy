@@ -57,7 +57,9 @@ services:
         condition: service_healthy
 
   account-service:
-    build: ./account-service
+    build:
+      context: .
+      dockerfile: account-service/Dockerfile
     container_name: bank-of-decoy-account-service
     restart: unless-stopped
     ports:
@@ -77,7 +79,9 @@ services:
         condition: service_started
 
   pix-key-service:
-    build: ./pix-key-service
+    build:
+      context: .
+      dockerfile: pix-key-service/Dockerfile
     container_name: bank-of-decoy-pix-key-service
     restart: unless-stopped
     ports:
