@@ -24,14 +24,27 @@ services:
     restart: unless-stopped
     ports:
       - "9092:9092"
+      - "29092:29092"
     environment:
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: controller,broker
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # Dois listeners PLAINTEXT: um so alcancavel de dentro da rede do
+      # compose (anunciado como `kafka:9092`, usado pelos servicos entre
+      # si) e outro alcancavel do host (`localhost:29092`, usado por
+      # pytest/scripts rodando fora do Docker). Sem isso, um cliente rodando
+      # DENTRO de um container conecta em `kafka:9092` para o bootstrap,
+      # mas a resposta de metadata do broker manda reconectar no endereco
+      # anunciado - se so existisse o listener `localhost`, esse segundo
+      # passo apontaria o cliente de volta para si mesmo (loopback dentro
+      # do proprio container), nunca para o Kafka de fato (issue #7 expos
+      # isso: o consumidor do account-service falhava com
+      # "Connect to ipv4#127.0.0.1:9092 failed" mesmo com
+      # KAFKA_BOOTSTRAP_SERVERS=kafka:9092 configurado corretamente).
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
     volumes:
