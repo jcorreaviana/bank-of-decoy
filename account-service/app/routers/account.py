@@ -4,8 +4,14 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.core.db import get_db
-from app.schemas.account import AccountCreateRequest, AccountCreateResponse, AccountDetailResponse
-from app.services.account_service import create_account, get_account
+from app.schemas.account import (
+    AccountCreateRequest,
+    AccountCreateResponse,
+    AccountDetailResponse,
+    TransferenciaRequest,
+    TransferenciaResponse,
+)
+from app.services.account_service import create_account, get_account, transferir_saldo
 
 router = APIRouter(prefix="/v1/accounts", tags=["accounts"])
 
@@ -32,4 +38,20 @@ def get_account_detail(account_id: uuid.UUID, db: Session = Depends(get_db)) -> 
     account = get_account(db, account_id)
     return AccountDetailResponse(
         id=account.id, status=account.status, tipo_conta=account.tipo_conta, created_at=account.created_at
+    )
+
+
+@router.post("/transferencias", response_model=TransferenciaResponse)
+def post_transferencia(payload: TransferenciaRequest, db: Session = Depends(get_db)) -> TransferenciaResponse:
+    """Endpoint interno, chamado sincronamente por transaction-service para
+    debitar a conta de origem e creditar a conta de destino ANTES de criar
+    as duas linhas do ledger de partida dobrada (specs/business/16-saldo-partida-dobrada.md).
+    Nao valida status "ativa" das contas aqui - quem chama ja validou a
+    conta de origem (specs/business/06) antes de chegar neste ponto."""
+    conta_origem, conta_destino = transferir_saldo(db, payload)
+    return TransferenciaResponse(
+        conta_origem_id=conta_origem.id,
+        conta_destino_id=conta_destino.id,
+        saldo_origem=float(conta_origem.saldo),
+        saldo_destino=float(conta_destino.saldo),
     )

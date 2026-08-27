@@ -22,6 +22,12 @@ PESO_VALOR_ATIPICO = 40
 PESO_HORARIO_ATIPICO = 25
 PESO_DESTINATARIO_NOVO = 20
 PESO_VELOCIDADE_ALTA = 35
+PESO_ENTRADA_SAIDA_RAPIDA = 45
+"""Maior peso entre os sinais (specs/business/16-saldo-partida-dobrada.md):
+dinheiro que entra e sai rapidamente da mesma conta e um sinal de mula mais
+forte que qualquer sinal isolado de origem ou destino - o padrao so fica
+visivel observando as DUAS pontas da conta (entrada seguida de saida), o
+que a partida dobrada agora permite."""
 LIMIAR_SUSPEITA = 50
 
 VALOR_ATIPICO_LIMIAR = 20_000.0
@@ -40,6 +46,10 @@ class TransactionRiskInput:
     velocidade_alta: bool = False
     """Varias transacoes da mesma conta em janela curta - mesma observacao
     acima."""
+    entrada_saida_rapida: bool = False
+    """Conta recebeu uma entrada e, dentro de uma janela curta, esta enviando
+    uma quantia comparavel para fora (padrao mula bidirecional) - calculado
+    pelo chamador a partir do proprio ledger de partida dobrada."""
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,9 @@ def evaluate_transaction_risk(input: TransactionRiskInput) -> RiskResult:
     if input.velocidade_alta:
         sinais.append("velocidade_alta")
         score += PESO_VELOCIDADE_ALTA
+    if input.entrada_saida_rapida:
+        sinais.append("entrada_saida_rapida")
+        score += PESO_ENTRADA_SAIDA_RAPIDA
 
     status = "suspeita" if score >= LIMIAR_SUSPEITA else "concluida"
     return RiskResult(status=status, score=score, sinais=sinais)

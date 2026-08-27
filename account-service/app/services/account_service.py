@@ -9,11 +9,12 @@ from app.core.errors import (
     AccountNotFoundError,
     OnboardingNotApprovedError,
     OnboardingNotFoundError,
+    SaldoInsuficienteError,
 )
 from app.core.logging import get_logger, get_trace_id
 from app.models import Account
 from app.repositories import account_repository
-from app.schemas.account import AccountCreateRequest
+from app.schemas.account import AccountCreateRequest, TransferenciaRequest
 from app.services.onboarding_internal_client import (
     OnboardingNotFoundUpstreamError,
     fetch_onboarding_internal,
@@ -22,6 +23,13 @@ from app.services.onboarding_internal_client import (
 logger = get_logger(__name__)
 
 _TIPO_CONTA_DEFAULT_EVENTO = "corrente"
+
+SALDO_INICIAL = 10_000.00
+"""Sem endpoint de deposito nesta fase (specs/business/16-saldo-partida-dobrada.md)
+- toda conta comeca com um saldo modesto o suficiente para cobrir a faixa
+usual de transacao do gerador sintetico (10-5.000, specs/business/06) sem
+viabilizar de cara os valores atipicos altos (>20.000) que devem ficar
+raros por design do sinal de risco `valor_atipico`."""
 
 
 def create_account(db: Session, payload: AccountCreateRequest) -> Account:
@@ -80,6 +88,7 @@ def create_account(db: Session, payload: AccountCreateRequest) -> Account:
         cpf=onboarding["cpf"],
         tipo_conta=payload.tipo_conta,
         status="ativa",
+        saldo=SALDO_INICIAL,
         risco_score=risco_cadastro.get("score"),
         risco_sinais=risco_cadastro.get("sinais") or [],
     )
@@ -136,6 +145,7 @@ def create_account_from_event(db: Session, onboarding_id: uuid.UUID, payload: di
         cpf=decrypt_value(payload["cpf"]),
         tipo_conta=_TIPO_CONTA_DEFAULT_EVENTO,
         status="ativa",
+        saldo=SALDO_INICIAL,
         risco_score=payload.get("risco_score"),
         risco_sinais=payload.get("risco_sinais") or [],
     )
@@ -151,3 +161,58 @@ def create_account_from_event(db: Session, onboarding_id: uuid.UUID, payload: di
     )
 
     return account
+
+
+def transferir_saldo(db: Session, payload: TransferenciaRequest) -> tuple[Account, Account]:
+    """Debita `conta_origem` e credita `conta_destino` atomicamente, na
+    mesma transacao de banco local (as duas contas vivem na MESMA tabela
+    `accounts` deste servico) - chamado sincronamente por transaction-service
+    ANTES de criar as duas linhas do ledger de partida dobrada
+    (specs/business/16-saldo-partida-dobrada.md). account-service e a fonte
+    da verdade do saldo: o dominio da conta e quem decide se ela pode gastar,
+    a transacao so e uma interessada em atualiza-lo.
+
+    As duas contas sao travadas em ordem determinística de UUID (nao na
+    ordem origem/destino) para evitar deadlock entre duas transferencias
+    concorrentes em sentidos opostos (A->B e B->A ao mesmo tempo)."""
+    primeiro_id, segundo_id = sorted((payload.conta_origem_id, payload.conta_destino_id))
+    primeira_conta = account_repository.get_by_id_active_for_update(db, primeiro_id)
+    segunda_conta = account_repository.get_by_id_active_for_update(db, segundo_id)
+
+    contas_por_id = {c.id: c for c in (primeira_conta, segunda_conta) if c is not None}
+    conta_origem = contas_por_id.get(payload.conta_origem_id)
+    conta_destino = contas_por_id.get(payload.conta_destino_id)
+
+    if conta_origem is None or conta_destino is None:
+        raise AccountNotFoundError()
+
+    if float(conta_origem.saldo) < payload.valor:
+        logger.warning(
+            "Tentativa de transferencia com saldo insuficiente.",
+            extra={
+                "context": {
+                    "conta_origem_id": str(payload.conta_origem_id),
+                    "saldo_disponivel": float(conta_origem.saldo),
+                    "valor_solicitado": payload.valor,
+                }
+            },
+        )
+        raise SaldoInsuficienteError()
+
+    conta_origem.saldo = float(conta_origem.saldo) - payload.valor
+    conta_destino.saldo = float(conta_destino.saldo) + payload.valor
+    db.flush()
+    db.commit()
+
+    logger.info(
+        "Transferencia de saldo concluida.",
+        extra={
+            "context": {
+                "conta_origem_id": str(payload.conta_origem_id),
+                "conta_destino_id": str(payload.conta_destino_id),
+                "valor": payload.valor,
+            }
+        },
+    )
+
+    return conta_origem, conta_destino

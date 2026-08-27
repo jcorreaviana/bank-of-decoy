@@ -13,6 +13,7 @@ def post_transaction(payload: TransactionCreateRequest, db: Session = Depends(ge
     transaction = create_transaction(db, payload)
     return TransactionCreateResponse(
         id=transaction.id,
+        e2e_id=transaction.e2e_id,
         status=transaction.status,
         risco_transacao=RiscoTransacao(score=transaction.risco_score, sinais=transaction.risco_sinais or []),
         created_at=transaction.created_at,
