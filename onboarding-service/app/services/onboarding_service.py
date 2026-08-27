@@ -11,6 +11,7 @@ from app.core.logging import get_logger
 from app.models import Onboarding
 from app.repositories import onboarding_repository
 from app.schemas.onboarding import OnboardingCreateRequest
+from app.services.onboarding_events import publish_onboarding_classified
 from app.services.onboarding_risk import evaluate_onboarding_risk
 
 logger = get_logger(__name__)
@@ -83,6 +84,10 @@ def create_onboarding(db: Session, payload: OnboardingCreateRequest) -> Onboardi
             }
         },
     )
+
+    # Sempre apos o commit acima (specs/tech/messaging.md) - o status
+    # classificado ja esta persistido antes de qualquer evento sair.
+    publish_onboarding_classified(db, onboarding)
 
     return created
 
