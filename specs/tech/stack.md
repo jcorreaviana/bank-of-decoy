@@ -7,6 +7,7 @@
 - SQLAlchemy como ORM/toolkit de acesso a dados.
 - psycopg2-binary como driver Postgres.
 - pytest como framework de testes (+ `pytest-cov`, `httpx` para testes de contrato).
+- `confluent-kafka` como client Kafka (produtor e consumidor) — wheel binário disponível para Windows/Linux sem build C manual, decisão tomada na história [07-kafka-onboarding-eventos.md](../business/07-kafka-onboarding-eventos.md), primeiro uso real de Kafka no repositório.
 
 ## Ambiente virtual
 - Cada microserviço tem seu próprio ambiente virtual isolado (`venv` ou `.venv` na raiz do serviço).
