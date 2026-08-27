@@ -36,3 +36,11 @@ class PixKeyCreateResponse(BaseModel):
     tipo: str
     valor: str
     created_at: datetime
+
+
+class PixKeyLookupResponse(BaseModel):
+    id: uuid.UUID
+    account_id: uuid.UUID
+    tipo: str
+    valor: str
+    ativa: bool

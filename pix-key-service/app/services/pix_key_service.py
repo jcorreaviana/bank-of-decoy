@@ -38,6 +38,13 @@ def create_pix_key(db: Session, payload: PixKeyCreateRequest) -> PixKey:
     return pix_key
 
 
+def lookup_pix_key_by_valor(db: Session, valor: str) -> PixKey:
+    pix_key = pix_key_repository.get_by_valor_any(db, valor)
+    if pix_key is None:
+        raise PixKeyNotFoundError()
+    return pix_key
+
+
 def delete_pix_key(db: Session, pix_key_id: uuid.UUID) -> None:
     pix_key = pix_key_repository.get_by_id_active(db, pix_key_id)
     if pix_key is None:

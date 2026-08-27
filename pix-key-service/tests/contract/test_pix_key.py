@@ -142,3 +142,35 @@ def test_delete_pix_key_inexistente_returns_404() -> None:
 
     assert response.status_code == 404
     assert response.json()["error_code"] == "PIX_KEY_NOT_FOUND"
+
+
+def test_get_pix_key_lookup_chave_ativa_returns_200_ativa_true() -> None:
+    client = TestClient(app)
+    created = client.post("/v1/pix-keys", json=_payload(valor="lookup-ativa@example.com"))
+
+    response = client.get("/v1/pix-keys/lookup", params={"valor": "lookup-ativa@example.com"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == created.json()["id"]
+    assert body["ativa"] is True
+
+
+def test_get_pix_key_lookup_chave_cancelada_returns_200_ativa_false() -> None:
+    client = TestClient(app)
+    created = client.post("/v1/pix-keys", json=_payload(valor="lookup-cancelada@example.com"))
+    client.delete(f"/v1/pix-keys/{created.json()['id']}")
+
+    response = client.get("/v1/pix-keys/lookup", params={"valor": "lookup-cancelada@example.com"})
+
+    assert response.status_code == 200
+    assert response.json()["ativa"] is False
+
+
+def test_get_pix_key_lookup_chave_inexistente_returns_404() -> None:
+    client = TestClient(app)
+
+    response = client.get("/v1/pix-keys/lookup", params={"valor": "nunca-existiu@example.com"})
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "PIX_KEY_NOT_FOUND"
