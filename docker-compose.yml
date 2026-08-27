@@ -68,7 +68,7 @@ services:
       DATABASE_URL: postgresql://bank:bank@postgres:5432/onboarding
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       # Dev-only: mesma chave em onboarding-service e account-service (specs/business/10-criptografia-cpf.md).
-      CPF_ENCRYPTION_KEY: ***REMOVED-CPF-ENCRYPTION-KEY-SEE-ISSUE-26***
+      CPF_ENCRYPTION_KEY: ${CPF_ENCRYPTION_KEY}
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,7 +92,7 @@ services:
       DATABASE_URL: postgresql://bank:bank@postgres:5432/account
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       ONBOARDING_SERVICE_URL: http://onboarding-service:8001
-      CPF_ENCRYPTION_KEY: ***REMOVED-CPF-ENCRYPTION-KEY-SEE-ISSUE-26***
+      CPF_ENCRYPTION_KEY: ${CPF_ENCRYPTION_KEY}
     depends_on:
       postgres:
         condition: service_healthy
