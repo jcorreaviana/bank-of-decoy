@@ -6,16 +6,18 @@ comentario explicando o score, sem merge.
 Roda inteiramente em codigo deterministico (nunca dentro da invocacao do
 SDK - ver sdk_invocation.py)."""
 
+from notifications import notify_auto_merge, notify_pr_needs_review
+
 from agent_local import agent_ops_db, github_client
 from agent_local.risk_score import RiskScoreResult
 
 
-def open_pull_request(issue_number: int, branch: str, repo_dir: str, title: str) -> int:
+def open_pull_request(issue_number: int, branch: str, repo_dir: str, title: str) -> tuple[int, str]:
     body = f"Implementa a issue #{issue_number}, via agent-local (Claude Agent SDK).\n\nCloses #{issue_number}"
     return github_client.create_pr(title=title, body=body, base="main", head=branch, cwd=repo_dir)
 
 
-def apply_gate(issue_number: int, pr_number: int, risk: RiskScoreResult) -> str:
+def apply_gate(issue_number: int, pr_number: int, pr_url: str, risk: RiskScoreResult) -> str:
     """Retorna a decisao aplicada ("autonomo" | "humano") apos executar as
     acoes correspondentes (merge ou label+comentario)."""
     racional = (
@@ -31,11 +33,13 @@ def apply_gate(issue_number: int, pr_number: int, risk: RiskScoreResult) -> str:
     if risk.decision == "autonomo":
         github_client.comment_pr(pr_number, f"Score abaixo do threshold - merge automático.\n\n{racional}")
         github_client.merge_pr(pr_number)
+        notify_auto_merge(issue_number, pr_number, risk.score, pr_url)
     else:
         github_client.add_pr_label(pr_number, "needs-human-review")
         github_client.comment_pr(
             pr_number, f"Score acima do threshold - aguardando revisão humana.\n\n{racional}"
         )
+        notify_pr_needs_review(pr_number, pr_url, risk.score, risk.threshold)
 
     agent_ops_db.record_risk_decision(
         issue_number=issue_number,

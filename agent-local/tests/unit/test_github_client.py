@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from agent_local.github_client import Issue, is_issue_open, list_candidate_issues, view_issue
+from agent_local.github_client import Issue, create_pr, is_issue_open, list_candidate_issues, view_issue
 
 
 def _mock_run(stdout: str) -> MagicMock:
@@ -64,3 +64,14 @@ def test_is_issue_open_true_quando_state_open() -> None:
 def test_is_issue_open_false_quando_state_closed() -> None:
     with patch("agent_local.github_client.subprocess.run", return_value=_mock_run('{"state": "CLOSED"}')):
         assert is_issue_open(1) is False
+
+
+def test_create_pr_retorna_numero_e_url() -> None:
+    with patch(
+        "agent_local.github_client.subprocess.run",
+        return_value=_mock_run("https://github.com/x/y/pull/25\n"),
+    ):
+        pr_number, url = create_pr(title="t", body="b", base="main", head="branch", cwd=".")
+
+    assert pr_number == 25
+    assert url == "https://github.com/x/y/pull/25"

@@ -1,4 +1,5 @@
 httpx>=0.27,<1.0
+-e ../shared/notifications
 sqlalchemy>=2.0,<3.0
 psycopg2-binary>=2.9,<3.0
 claude-agent-sdk>=0.2.0,<1.0

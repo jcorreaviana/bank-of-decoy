@@ -83,7 +83,7 @@ def comment_issue(number: int, body: str) -> None:
     _run(["issue", "comment", str(number), "--body", body])
 
 
-def create_pr(title: str, body: str, base: str, head: str, cwd: str) -> int:
+def create_pr(title: str, body: str, base: str, head: str, cwd: str) -> tuple[int, str]:
     result = subprocess.run(
         ["gh", "pr", "create", "--title", title, "--body", body, "--base", base, "--head", head],
         capture_output=True,
@@ -93,7 +93,8 @@ def create_pr(title: str, body: str, base: str, head: str, cwd: str) -> int:
         cwd=cwd,
     )
     url = result.stdout.strip().splitlines()[-1]
-    return int(url.rstrip("/").rsplit("/", 1)[-1])
+    pr_number = int(url.rstrip("/").rsplit("/", 1)[-1])
+    return pr_number, url
 
 
 def add_pr_label(pr_number: int, label: str) -> None:

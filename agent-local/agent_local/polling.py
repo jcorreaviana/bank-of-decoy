@@ -3,9 +3,13 @@
 para validacao/CI."""
 
 import argparse
+import logging
 import re
 import time
+import traceback
 from pathlib import Path
+
+from notifications import notify_agent_error
 
 from agent_local import git_ops, github_client, test_runner
 from agent_local.config import get_settings
@@ -14,6 +18,8 @@ from agent_local.gate import apply_gate, open_pull_request
 from agent_local.github_client import Issue
 from agent_local.risk_score import calculate_risk_score
 from agent_local.sdk_invocation import build_task_prompt, invoke_sdk
+
+logger = logging.getLogger(__name__)
 
 _SPEC_REF_PATTERN = re.compile(r"`(specs/business/[\w.\-]+\.md)`")
 
@@ -63,8 +69,8 @@ def process_issue(issue: Issue) -> dict:
     risk = calculate_risk_score(issue.body, coverage_fraction, diff_stat.lines_changed)
 
     git_ops.push_branch(repo_dir, branch)
-    pr_number = open_pull_request(issue.number, branch, repo_dir, title=f"{issue.title} (#{issue.number})")
-    decision = apply_gate(issue.number, pr_number, risk)
+    pr_number, pr_url = open_pull_request(issue.number, branch, repo_dir, title=f"{issue.title} (#{issue.number})")
+    decision = apply_gate(issue.number, pr_number, pr_url, risk)
 
     return {
         "issue_number": issue.number,
@@ -77,10 +83,28 @@ def process_issue(issue: Issue) -> dict:
 
 
 def run_cycle() -> dict | None:
+    """Erro nao tratado ao processar uma issue (SDK indisponivel, falha de
+    rede, exceção inesperada) e notificado e logado, mas NAO derruba o
+    processo - mesmo racional do agent-preditivo (specs/business/20-notificacoes-discord-agentes.md,
+    evento 4): a notificacao e o alerta para intervencao humana, um daemon
+    de polling deve sobreviver a falhas transitorias e tentar de novo no
+    proximo ciclo."""
     issue = pick_candidate_issue()
     if issue is None:
         return None
-    return process_issue(issue)
+    try:
+        return process_issue(issue)
+    except Exception as exc:
+        logger.error(
+            "Erro nao tratado processando issue no agent-local.",
+            extra={"context": {"issue_number": issue.number, "stack_trace": traceback.format_exc()}},
+        )
+        notify_agent_error(
+            "agent-local",
+            str(exc),
+            context={"issue": f"#{issue.number}", "traceback": traceback.format_exc()[-500:]},
+        )
+        return None
 
 
 def main() -> None:
