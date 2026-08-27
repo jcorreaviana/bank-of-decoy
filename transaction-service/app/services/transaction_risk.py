@@ -32,7 +32,7 @@ JANELA_VELOCIDADE_ALTA = timedelta(minutes=10)
 LIMIAR_VELOCIDADE_ALTA = 3  # transacoes anteriores na janela para considerar velocidade alta
 
 JANELA_ENTRADA_SAIDA_RAPIDA = timedelta(minutes=10)  # mesma janela de velocidade_alta, por consistencia
-RAZAO_ENTRADA_SAIDA_RAPIDA = 0.7
+RAZAO_ENTRADA_SAIDA_RAPIDA = 0.7  # 0.7 = 70% do valor da transacao de saida
 """Fracao minima do valor da saida atual que precisa ter chegado via
 entrada recente para caracterizar passagem de mula (specs/business/16-saldo-partida-dobrada.md)
 - 0.7 tolera uma pequena "sobra" retida na conta (comum em padroes reais de
