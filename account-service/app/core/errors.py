@@ -68,6 +68,14 @@ class AccountNotFoundError(DomainError):
         super().__init__("Conta nao encontrada.")
 
 
+class SaldoInsuficienteError(DomainError):
+    error_code = "SALDO_INSUFICIENTE"
+    status_code = 422
+
+    def __init__(self) -> None:
+        super().__init__("Saldo insuficiente para a transferencia.")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:

@@ -7,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
+from test_safety import require_disposable_database
+
 from app.core.config import get_settings
 from app.core.crypto import encrypt_value
 from app.main import app
@@ -21,6 +23,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _clean_accounts_table():
+    require_disposable_database(settings.database_url)
     engine = create_engine(settings.database_url)
     with engine.begin() as connection:
         connection.execute(text("TRUNCATE accounts"))
@@ -164,6 +167,71 @@ def test_get_account_not_found_returns_404() -> None:
     client = TestClient(app)
 
     response = client.get(f"/v1/accounts/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "ACCOUNT_NOT_FOUND"
+
+
+def _create_account(client: TestClient) -> dict:
+    onboarding_id = str(uuid.uuid4())
+    with _patch_onboarding_get(_mock_onboarding_response(200, id=onboarding_id)):
+        created = client.post("/v1/accounts", json={"onboarding_id": onboarding_id, "tipo_conta": "corrente"})
+    return created.json()
+
+
+def test_post_account_happy_path_starts_with_saldo_inicial() -> None:
+    client = TestClient(app)
+    account = _create_account(client)
+
+    engine = create_engine(settings.database_url)
+    with engine.connect() as connection:
+        row = connection.execute(text("SELECT saldo FROM accounts WHERE id = :id"), {"id": account["id"]}).one()
+    assert float(row.saldo) == 10_000.00
+
+
+def test_post_transferencia_happy_path_debita_e_credita() -> None:
+    client = TestClient(app)
+    origem = _create_account(client)
+    destino = _create_account(client)
+
+    response = client.post(
+        "/v1/accounts/transferencias",
+        json={"conta_origem_id": origem["id"], "conta_destino_id": destino["id"], "valor": 100.0},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["saldo_origem"] == 9_900.00
+    assert body["saldo_destino"] == 10_100.00
+
+
+def test_post_transferencia_saldo_insuficiente_returns_422_sem_alterar_saldos() -> None:
+    client = TestClient(app)
+    origem = _create_account(client)
+    destino = _create_account(client)
+
+    response = client.post(
+        "/v1/accounts/transferencias",
+        json={"conta_origem_id": origem["id"], "conta_destino_id": destino["id"], "valor": 999_999.0},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "SALDO_INSUFICIENTE"
+
+    engine = create_engine(settings.database_url)
+    with engine.connect() as connection:
+        row = connection.execute(text("SELECT saldo FROM accounts WHERE id = :id"), {"id": origem["id"]}).one()
+    assert float(row.saldo) == 10_000.00
+
+
+def test_post_transferencia_conta_origem_inexistente_returns_404() -> None:
+    client = TestClient(app)
+    destino = _create_account(client)
+
+    response = client.post(
+        "/v1/accounts/transferencias",
+        json={"conta_origem_id": str(uuid.uuid4()), "conta_destino_id": destino["id"], "valor": 10.0},
+    )
 
     assert response.status_code == 404
     assert response.json()["error_code"] == "ACCOUNT_NOT_FOUND"

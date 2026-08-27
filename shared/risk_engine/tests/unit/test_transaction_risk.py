@@ -1,6 +1,7 @@
 from risk_engine.transaction import (
     LIMIAR_SUSPEITA,
     PESO_DESTINATARIO_NOVO,
+    PESO_ENTRADA_SAIDA_RAPIDA,
     PESO_HORARIO_ATIPICO,
     PESO_VALOR_ATIPICO,
     PESO_VELOCIDADE_ALTA,
@@ -49,6 +50,12 @@ def test_velocidade_alta_dispara_via_flag_precomputada() -> None:
     assert result.score == PESO_VELOCIDADE_ALTA
 
 
+def test_entrada_saida_rapida_dispara_via_flag_precomputada() -> None:
+    result = evaluate_transaction_risk(_input(entrada_saida_rapida=True))
+    assert result.sinais == ["entrada_saida_rapida"]
+    assert result.score == PESO_ENTRADA_SAIDA_RAPIDA
+
+
 # --- orquestracao: evaluate_transaction_risk ---
 
 
@@ -94,3 +101,4 @@ def test_limiar_suspeita_e_atingivel_por_pelo_menos_duas_combinacoes() -> None:
     assert PESO_HORARIO_ATIPICO < LIMIAR_SUSPEITA
     assert PESO_DESTINATARIO_NOVO < LIMIAR_SUSPEITA
     assert PESO_VELOCIDADE_ALTA < LIMIAR_SUSPEITA
+    assert PESO_ENTRADA_SAIDA_RAPIDA < LIMIAR_SUSPEITA

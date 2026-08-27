@@ -31,6 +31,7 @@ class RiscoTransacao(BaseModel):
 
 class TransactionCreateResponse(BaseModel):
     id: uuid.UUID
+    e2e_id: uuid.UUID
     status: str
     risco_transacao: RiscoTransacao
     created_at: datetime

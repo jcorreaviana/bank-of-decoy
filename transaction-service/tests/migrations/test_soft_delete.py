@@ -22,7 +22,10 @@ def test_soft_delete_does_not_remove_row_physically() -> None:
     with Session(engine) as session:
         transaction = Transaction(
             id=uuid.uuid4(),
+            e2e_id=uuid.uuid4(),
+            tipo="saida",
             account_id=uuid.uuid4(),
+            contraparte_account_id=uuid.uuid4(),
             pix_key_destino="destino@example.com",
             valor=Decimal("150.00"),
             status="concluida",
@@ -51,7 +54,10 @@ def test_original_transaction_id_references_parent_transaction() -> None:
     with Session(engine) as session:
         original = Transaction(
             id=uuid.uuid4(),
+            e2e_id=uuid.uuid4(),
+            tipo="saida",
             account_id=uuid.uuid4(),
+            contraparte_account_id=uuid.uuid4(),
             pix_key_destino="destino@example.com",
             valor=Decimal("200.00"),
             status="concluida",
@@ -61,7 +67,10 @@ def test_original_transaction_id_references_parent_transaction() -> None:
 
         reversal = Transaction(
             id=uuid.uuid4(),
+            e2e_id=uuid.uuid4(),
+            tipo="saida",
             account_id=original.account_id,
+            contraparte_account_id=original.contraparte_account_id,
             pix_key_destino="destino@example.com",
             valor=Decimal("200.00"),
             status="concluida",

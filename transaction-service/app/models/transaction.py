@@ -12,7 +12,10 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    e2e_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    tipo: Mapped[str] = mapped_column(String, nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    contraparte_account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     pix_key_destino: Mapped[str] = mapped_column(String, nullable=False)
     valor: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="concluida")
