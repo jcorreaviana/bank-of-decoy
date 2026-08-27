@@ -144,6 +144,31 @@ def test_post_account_onboarding_service_unexpected_error_returns_500() -> None:
     assert response.json()["error_code"] == "INTERNAL_ERROR"
 
 
+def test_get_account_happy_path_returns_status() -> None:
+    client = TestClient(app)
+    onboarding_id = str(uuid.uuid4())
+
+    with _patch_onboarding_get(_mock_onboarding_response(200, id=onboarding_id)):
+        created = client.post("/v1/accounts", json={"onboarding_id": onboarding_id, "tipo_conta": "corrente"})
+
+    response = client.get(f"/v1/accounts/{created.json()['id']}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ativa"
+    assert body["tipo_conta"] == "corrente"
+    assert "cpf" not in body
+
+
+def test_get_account_not_found_returns_404() -> None:
+    client = TestClient(app)
+
+    response = client.get(f"/v1/accounts/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "ACCOUNT_NOT_FOUND"
+
+
 def test_post_account_onboarding_service_unavailable_returns_500_without_leaking_details() -> None:
     # raise_server_exceptions=False: queremos a resposta 500 que o handler
     # generico ja construiu, nao a excecao re-levantada pelo TestClient

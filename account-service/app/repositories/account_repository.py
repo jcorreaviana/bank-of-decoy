@@ -11,6 +11,11 @@ def get_by_onboarding_id_active(db: Session, onboarding_id: uuid.UUID) -> Accoun
     return db.scalar(stmt)
 
 
+def get_by_id_active(db: Session, account_id: uuid.UUID) -> Account | None:
+    stmt = select(Account).where(Account.id == account_id, Account.deleted_at.is_(None))
+    return db.scalar(stmt)
+
+
 def create(db: Session, account: Account) -> Account:
     db.add(account)
     db.flush()

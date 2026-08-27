@@ -14,3 +14,10 @@ class AccountCreateResponse(BaseModel):
     id: uuid.UUID
     status: str
     created_at: datetime
+
+
+class AccountDetailResponse(BaseModel):
+    id: uuid.UUID
+    status: str
+    tipo_conta: str
+    created_at: datetime

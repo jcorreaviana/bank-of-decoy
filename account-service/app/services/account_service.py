@@ -1,7 +1,14 @@
+import uuid
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.errors import AccountAlreadyExistsError, OnboardingNotApprovedError, OnboardingNotFoundError
+from app.core.errors import (
+    AccountAlreadyExistsError,
+    AccountNotFoundError,
+    OnboardingNotApprovedError,
+    OnboardingNotFoundError,
+)
 from app.core.logging import get_logger, get_trace_id
 from app.models import Account
 from app.repositories import account_repository
@@ -75,4 +82,11 @@ def create_account(db: Session, payload: AccountCreateRequest) -> Account:
         extra={"context": {"account_id": str(account.id), "onboarding_id": str(payload.onboarding_id)}},
     )
 
+    return account
+
+
+def get_account(db: Session, account_id: uuid.UUID) -> Account:
+    account = account_repository.get_by_id_active(db, account_id)
+    if account is None:
+        raise AccountNotFoundError()
     return account
