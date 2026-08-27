@@ -18,6 +18,8 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
+from test_safety import require_disposable_database
+
 from app.core.config import get_settings
 from app.core.crypto import decrypt_value
 from app.models import Account
@@ -36,6 +38,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _clean_accounts_table():
+    require_disposable_database(settings.database_url)
     engine = create_engine(settings.database_url)
     with engine.begin() as connection:
         connection.execute(text("TRUNCATE accounts"))

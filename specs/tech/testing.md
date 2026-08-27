@@ -1,5 +1,14 @@
 # Testing
 
+## Isolamento do banco em testes (regra crítica)
+
+**Suites de teste NUNCA apontam `DATABASE_URL` para o banco persistente do ambiente principal.** Sempre um banco de teste dedicado ou o ambiente efêmero (`docker-compose.test.yml`).
+
+- Motivo: um incidente real (issue #15/#16) apagou as 500.980 contas do dataset de volumetria (issue #8) porque a suíte de contrato do `account-service` rodou contra o banco persistente — a fixture autouse de limpeza (`TRUNCATE accounts`) não tinha nenhuma proteção. `pix-key-service` e `transaction-service` escaparam do mesmo risco por sorte (tabelas vazias no momento), não por proteção real.
+- Como o ambiente efêmero de teste reaproveita as mesmas portas e os mesmos nomes de banco do ambiente principal por design (`docker-compose.test.yml` substitui o principal, não roda em paralelo — ver `README.md`), a `DATABASE_URL` sozinha **não é suficiente** para diferenciar os dois ambientes.
+- Toda fixture que faz `TRUNCATE`/`DELETE` em massa chama `require_disposable_database(settings.database_url)` do pacote compartilhado `shared/test_safety` **antes** de qualquer operação destrutiva. Essa função aborta a suíte (não apenas pula o teste) a menos que a variável de ambiente `TESTING=true` esteja setada explicitamente — só definir `TESTING=true` depois de confirmar manualmente que o banco apontado é descartável.
+- Essa trava é código, não só convenção documentada aqui — está implementada nos 4 serviços (`onboarding-service`, `account-service`, `pix-key-service`, `transaction-service`).
+
 ## Cobertura mínima
 - 80% de cobertura em código de lógica de domínio: regras de risco, validações de negócio, cálculos, máquinas de estado (ex. `app/services/`).
 - Sem exigência de cobertura em código de infraestrutura: configuração de conexão de banco, setup de logging, bootstrap da app (`app/core/`), migrations.

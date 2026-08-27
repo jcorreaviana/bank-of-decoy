@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "test-safety"
+version = "0.1.0"
+description = "Trava de seguranca contra suites de teste rodarem TRUNCATE/DELETE no banco persistente principal por engano - compartilhada entre onboarding-service, account-service, pix-key-service e transaction-service (specs/tech/testing.md, incidente documentado na issue #15)."
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["test_safety*"]
