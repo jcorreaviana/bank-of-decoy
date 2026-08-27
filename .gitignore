@@ -9,3 +9,4 @@ htmlcov/
 *.egg-info/
 scripts/*.log
 rag_index/
+agent-local/workspace/
