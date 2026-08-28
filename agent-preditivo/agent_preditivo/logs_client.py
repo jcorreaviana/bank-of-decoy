@@ -75,10 +75,19 @@ def count_repeated_critical_or_error(entries: list[LogEntry]) -> dict[str, int]:
     """Conta ocorrencias de mensagem por (level, message), restrito a
     CRITICAL/ERROR - usado para o threshold de "log CRITICAL/ERROR repetido
     3+ vezes com a mesma mensagem em 5 min" (evita issue duplicada por
-    linha de erro isolada)."""
+    linha de erro isolada).
+
+    Entradas com `context.chaos_injected: true` (falha simulada pela
+    camada de caos, specs/business/11-camada-caos.md) sao ignoradas aqui -
+    esse threshold especifico e sobre erro real repetido; o sinal de
+    taxa de erro/latencia continua disparando com o caos ligado, e e la
+    que o design pretendido (docs/escopo-arquitetura.md v17) quer o efeito
+    visivel (specs/business/21-filtro-caos-pipeline-agentes.md)."""
     counts: dict[str, int] = {}
     for entry in entries:
         if entry.level not in ("CRITICAL", "ERROR"):
+            continue
+        if entry.context.get("chaos_injected"):
             continue
         key = f"{entry.level}:{entry.message}"
         counts[key] = counts.get(key, 0) + 1
