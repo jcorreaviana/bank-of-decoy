@@ -9,6 +9,7 @@ no resto do projeto), cria a issue via `gh issue create` e registra em
 `flagged_signals` (specs/business/13-agente-preditivo-registro.md).
 """
 
+import logging
 import re
 import subprocess
 from pathlib import Path
@@ -19,6 +20,8 @@ from agent_preditivo import agent_ops_db
 from agent_preditivo.bug_detection import BugSignal
 from agent_preditivo.llm import chat
 from agent_preditivo.opportunity_detection import OpportunityFinding
+
+logger = logging.getLogger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 BUG_TEMPLATE_PATH = _REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "bug-report.md"
@@ -167,6 +170,16 @@ def create_issue(title: str, body: str, label: str, extra_labels: list[str] | No
 def register_bug(signal: BugSignal) -> int | None:
     existing = agent_ops_db.find_open_signal(signal.signal_type, signal.service)
     if existing is not None:
+        logger.info(
+            "Sinal já sinalizado e em aberto - issue não reaberta (dedup).",
+            extra={
+                "context": {
+                    "signal_type": signal.signal_type,
+                    "service": signal.service,
+                    "issue_number": existing.get("issue_number"),
+                }
+            },
+        )
         return None  # já sinalizado e em aberto - dedup, nao repete a acao
 
     title, body = format_bug_issue(signal)
@@ -174,19 +187,42 @@ def register_bug(signal: BugSignal) -> int | None:
     issue_number, url = create_issue(title, body, "bug", extra_labels=extra_labels)
     agent_ops_db.register_signal(signal.signal_type, signal.service, issue_number=issue_number)
     notify_issue_created(issue_number, title, "bug", url)
+    logger.info(
+        "Issue de bug criada.",
+        extra={
+            "context": {
+                "issue_number": issue_number,
+                "signal_type": signal.signal_type,
+                "service": signal.service,
+                "chaos_ativo": signal.chaos_ativo,
+            }
+        },
+    )
     return issue_number
 
 
 def register_opportunity(finding: OpportunityFinding, scenario_path: Path | None) -> int | None:
     if finding.veredito != "GAP":
+        logger.info(
+            "Cenário sem gap - nenhuma issue aberta.",
+            extra={"context": {"scenario": finding.scenario_name, "veredito": finding.veredito}},
+        )
         return None
 
     existing = agent_ops_db.find_open_signal(finding.scenario_name, "oportunidade")
     if existing is not None:
+        logger.info(
+            "Gap já sinalizado e em aberto - issue não reaberta (dedup).",
+            extra={"context": {"scenario": finding.scenario_name, "issue_number": existing.get("issue_number")}},
+        )
         return None
 
     title, body = format_opportunity_issue(finding, scenario_path)
     issue_number, url = create_issue(title, body, "business-story")
     agent_ops_db.register_signal(finding.scenario_name, "oportunidade", issue_number=issue_number)
     notify_issue_created(issue_number, title, "business-story", url)
+    logger.info(
+        "Issue de oportunidade criada.",
+        extra={"context": {"issue_number": issue_number, "scenario": finding.scenario_name}},
+    )
     return issue_number

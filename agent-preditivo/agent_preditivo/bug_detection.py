@@ -7,11 +7,14 @@ docs/escopo-arquitetura.md e specs/business/13-agente-preditivo-registro.md:
 - log CRITICAL/ERROR repetido 3+ vezes em 5 min com a mesma mensagem
 """
 
+import logging
 from dataclasses import dataclass, replace
 
 from agent_preditivo.chaos_status import is_chaos_enabled
 from agent_preditivo.logs_client import LogEntry, count_repeated_critical_or_error, fetch_logs
 from agent_preditivo.prometheus_client import GoldenSignals, fetch_golden_signals
+
+logger = logging.getLogger(__name__)
 
 LIMIAR_TAXA_ERRO = 0.05
 LIMIAR_LATENCIA_MULTIPLICADOR = 2.0
@@ -85,6 +88,19 @@ def check_log_repetido(service: str, entries: list[LogEntry]) -> BugSignal | Non
 def detect_bugs_for_service(service: str, prometheus_url: str | None = None) -> list[BugSignal]:
     signals = fetch_golden_signals(service, prometheus_url=prometheus_url)
     entries = fetch_logs(service, since="5m")
+    logger.info(
+        "Golden signals e logs estruturados consultados.",
+        extra={
+            "context": {
+                "service": service,
+                "taxa_erro": signals.taxa_erro,
+                "latencia_p95_atual": signals.latencia_p95_atual,
+                "latencia_mediana_historica": signals.latencia_mediana_historica,
+                "saturacao_pool": signals.saturacao_pool,
+                "log_entries_5m": len(entries),
+            }
+        },
+    )
 
     found = [
         check_taxa_erro(signals),
@@ -93,4 +109,24 @@ def detect_bugs_for_service(service: str, prometheus_url: str | None = None) -> 
         check_log_repetido(service, entries),
     ]
     chaos_ativo = is_chaos_enabled(service)
-    return [replace(signal, chaos_ativo=chaos_ativo) for signal in found if signal is not None]
+    result = [replace(signal, chaos_ativo=chaos_ativo) for signal in found if signal is not None]
+
+    if result:
+        for signal in result:
+            logger.info(
+                "Sinal de bug detectado.",
+                extra={
+                    "context": {
+                        "service": signal.service,
+                        "signal_type": signal.signal_type,
+                        "detail": signal.detail,
+                        "chaos_ativo": signal.chaos_ativo,
+                    }
+                },
+            )
+    else:
+        logger.info(
+            "Nenhum sinal de bug detectado neste ciclo.",
+            extra={"context": {"service": service}},
+        )
+    return result

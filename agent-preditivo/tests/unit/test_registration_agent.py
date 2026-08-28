@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import patch
 
 from agent_preditivo.bug_detection import BugSignal
@@ -187,3 +188,57 @@ def test_register_opportunity_nao_cria_issue_quando_sem_gap() -> None:
 
     assert result is None
     mock_create.assert_not_called()
+
+
+def test_register_bug_loga_info_quando_dedup(caplog) -> None:
+    """Issue #33: decisao de nao reabrir issue (dedup) precisa ficar
+    visivel no log, nao so no retorno None silencioso."""
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x")
+
+    with (
+        caplog.at_level(logging.INFO, logger="agent_preditivo.registration_agent"),
+        patch(
+            "agent_preditivo.registration_agent.agent_ops_db.find_open_signal",
+            return_value={"id": "existing", "issue_number": 7},
+        ),
+        patch("agent_preditivo.registration_agent.create_issue") as mock_create,
+    ):
+        result = register_bug(signal)
+
+    assert result is None
+    mock_create.assert_not_called()
+    messages = [record.message for record in caplog.records]
+    assert any("dedup" in m for m in messages)
+
+
+def test_register_bug_loga_info_quando_issue_criada(caplog) -> None:
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x")
+
+    with (
+        caplog.at_level(logging.INFO, logger="agent_preditivo.registration_agent"),
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.create_issue",
+            return_value=(42, "https://github.com/x/y/issues/42"),
+        ),
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal"),
+        patch("agent_preditivo.registration_agent.chat", return_value="SINAL_QUE_DISPAROU: x\nEVIDENCIA: y"),
+        patch("agent_preditivo.registration_agent.notify_issue_created"),
+    ):
+        register_bug(signal)
+
+    messages = [record.message for record in caplog.records]
+    assert any("Issue de bug criada" in m for m in messages)
+
+
+def test_register_opportunity_loga_info_quando_sem_gap(caplog) -> None:
+    finding = OpportunityFinding(
+        scenario_name="cenario_x", veredito="SEM_GAP", racional="ok", observed_behavior="ok", rule_chunks=[]
+    )
+
+    with caplog.at_level(logging.INFO, logger="agent_preditivo.registration_agent"):
+        result = register_opportunity(finding, scenario_path=None)
+
+    assert result is None
+    messages = [record.message for record in caplog.records]
+    assert any("sem gap" in m.lower() for m in messages)

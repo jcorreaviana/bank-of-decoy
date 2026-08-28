@@ -10,6 +10,7 @@ class Settings:
     ollama_model: str
     services: list[str]
     api_base_urls: dict[str, str]
+    log_level: str
 
 
 DEFAULT_INTERVAL_SECONDS = 300
@@ -36,4 +37,5 @@ def get_settings() -> Settings:
         ollama_model=os.environ.get("PREDICTIVE_AGENT_MODEL", "llama3.2:3b"),
         services=DEFAULT_SERVICES,
         api_base_urls=_api_base_urls(),
+        log_level=os.environ.get("LOG_LEVEL", "INFO"),
     )

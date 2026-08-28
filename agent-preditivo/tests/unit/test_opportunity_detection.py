@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import patch
 
 from agent_preditivo.opportunity_detection import _judge
@@ -55,3 +56,17 @@ def test_judge_formato_inesperado_do_llm_cai_para_sem_gap() -> None:
         finding = _judge(_scenario())
 
     assert finding.veredito == "SEM_GAP"
+
+
+def test_judge_loga_info_com_veredito_do_cenario(caplog) -> None:
+    """Issue #33: classificacao de cada cenario (GAP ou SEM_GAP) precisa
+    ficar visivel no log, nao so no retorno do dataclass."""
+    with (
+        caplog.at_level(logging.INFO, logger="agent_preditivo.opportunity_detection"),
+        patch("agent_preditivo.opportunity_detection.search_specs", return_value=[]),
+        patch("agent_preditivo.opportunity_detection.chat", return_value="VEREDITO: SEM_GAP\nRACIONAL: nenhuma regra"),
+    ):
+        _judge(_scenario())
+
+    messages = [record.message for record in caplog.records]
+    assert any("avaliado" in m for m in messages)

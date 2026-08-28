@@ -10,6 +10,7 @@ comparacao; ausencia de regra clara e sempre SEM_GAP, nunca "gap
 provavel" inventado.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,8 @@ from agent_preditivo.config import get_settings
 from agent_preditivo.llm import chat
 from agent_preditivo.rag import search_specs
 from agent_preditivo.scenarios import SCENARIOS, ScenarioResult
+
+logger = logging.getLogger(__name__)
 
 _SCENARIOS_DIR = Path(__file__).resolve().parents[2] / "tests" / "scenarios"
 
@@ -71,6 +74,18 @@ def _judge(scenario: ScenarioResult) -> OpportunityFinding:
 
     veredito = veredito_match.group(1) if veredito_match else "SEM_GAP"
     racional = racional_match.group(1).strip() if racional_match else raw.strip()
+
+    logger.info(
+        "Cenário de oportunidade avaliado.",
+        extra={
+            "context": {
+                "scenario": scenario.name,
+                "veredito": veredito,
+                "racional": racional,
+                "rule_chunks_encontrados": len(rule_chunks),
+            }
+        },
+    )
 
     return OpportunityFinding(
         scenario_name=scenario.name,

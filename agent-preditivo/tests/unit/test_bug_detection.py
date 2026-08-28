@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import patch
 
 from agent_preditivo.bug_detection import (
@@ -117,3 +118,37 @@ def test_detect_bugs_for_service_chaos_desligado_nao_marca() -> None:
 
     assert len(signals) == 1
     assert signals[0].chaos_ativo is False
+
+
+def test_detect_bugs_for_service_loga_info_quando_sem_sinal(caplog) -> None:
+    """Issue #33: ciclo sem achado nao pode ficar silencioso - precisa
+    logar em INFO tanto o resultado da consulta quanto a ausencia de sinal."""
+    with (
+        caplog.at_level(logging.INFO, logger="agent_preditivo.bug_detection"),
+        patch("agent_preditivo.bug_detection.fetch_golden_signals", return_value=_signals()),
+        patch("agent_preditivo.bug_detection.fetch_logs", return_value=[]),
+        patch("agent_preditivo.bug_detection.is_chaos_enabled", return_value=False),
+    ):
+        signals = detect_bugs_for_service("transaction-service")
+
+    assert signals == []
+    messages = [record.message for record in caplog.records]
+    assert any("consultados" in m for m in messages)
+    assert any("Nenhum sinal de bug" in m for m in messages)
+
+
+def test_detect_bugs_for_service_loga_info_por_sinal_encontrado(caplog) -> None:
+    with (
+        caplog.at_level(logging.INFO, logger="agent_preditivo.bug_detection"),
+        patch(
+            "agent_preditivo.bug_detection.fetch_golden_signals",
+            return_value=_signals(taxa_erro=LIMIAR_TAXA_ERRO + 0.1),
+        ),
+        patch("agent_preditivo.bug_detection.fetch_logs", return_value=[]),
+        patch("agent_preditivo.bug_detection.is_chaos_enabled", return_value=False),
+    ):
+        signals = detect_bugs_for_service("transaction-service")
+
+    assert len(signals) == 1
+    messages = [record.message for record in caplog.records]
+    assert any("Sinal de bug detectado" in m for m in messages)

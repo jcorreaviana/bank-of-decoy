@@ -14,6 +14,7 @@ from notifications import notify_agent_error
 
 from agent_preditivo.bug_detection import detect_bugs_for_service
 from agent_preditivo.config import get_settings
+from agent_preditivo.logging_config import configure_logging, new_trace_id
 from agent_preditivo.opportunity_detection import run_opportunity_battery, save_scenario_journey
 from agent_preditivo.registration_agent import register_bug, register_opportunity
 
@@ -22,16 +23,22 @@ logger = logging.getLogger(__name__)
 
 def run_bug_cycle() -> list[int]:
     settings = get_settings()
+    logger.info("Ciclo de detecção de bug iniciado.", extra={"context": {"services": settings.services}})
     issue_numbers = []
     for service in settings.services:
         for signal in detect_bugs_for_service(service):
             issue_number = register_bug(signal)
             if issue_number is not None:
                 issue_numbers.append(issue_number)
+    logger.info(
+        "Ciclo de detecção de bug concluído.",
+        extra={"context": {"issues_criadas": issue_numbers}},
+    )
     return issue_numbers
 
 
 def run_opportunity_cycle(api_base_urls: dict[str, str] | None = None) -> list[int]:
+    logger.info("Ciclo de detecção de oportunidade iniciado.")
     issue_numbers = []
     findings = run_opportunity_battery(api_base_urls)
     for finding in findings:
@@ -41,6 +48,10 @@ def run_opportunity_cycle(api_base_urls: dict[str, str] | None = None) -> list[i
         issue_number = register_opportunity(finding, scenario_path)
         if issue_number is not None:
             issue_numbers.append(issue_number)
+    logger.info(
+        "Ciclo de detecção de oportunidade concluído.",
+        extra={"context": {"cenarios_avaliados": len(findings), "issues_criadas": issue_numbers}},
+    )
     return issue_numbers
 
 
@@ -51,10 +62,13 @@ def run_cycle(include_opportunity: bool = True) -> None:
     proximo ciclo; a notificacao e o mecanismo de alerta para intervencao
     humana, nao um crash (specs/business/20-notificacoes-discord-agentes.md,
     evento 4)."""
+    new_trace_id()  # um trace_id por ciclo - todos os logs deste ciclo ficam correlacionados
+    logger.info("Ciclo do agent-preditivo iniciado.", extra={"context": {"include_opportunity": include_opportunity}})
     try:
         run_bug_cycle()
         if include_opportunity:
             run_opportunity_cycle()
+        logger.info("Ciclo do agent-preditivo concluído com sucesso.")
     except Exception as exc:
         logger.error(
             "Erro nao tratado no ciclo do agent-preditivo.",
@@ -70,6 +84,7 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    configure_logging("agent-preditivo", settings.log_level)
     if args.once:
         run_cycle(include_opportunity=not args.skip_opportunity)
         return

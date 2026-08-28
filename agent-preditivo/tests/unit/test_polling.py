@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import patch
 
 from agent_preditivo.polling import run_cycle
@@ -26,3 +27,18 @@ def test_run_cycle_sem_erro_nao_notifica() -> None:
         run_cycle(include_opportunity=False)
 
     mock_notify.assert_not_called()
+
+
+def test_run_cycle_sucesso_loga_inicio_e_fim(caplog) -> None:
+    """Issue #33: ciclo sem achado nenhum (caminho feliz) nao pode ficar
+    silencioso - precisa logar inicio e conclusao mesmo sem notificacao."""
+    with (
+        caplog.at_level(logging.INFO, logger="agent_preditivo.polling"),
+        patch("agent_preditivo.polling.run_bug_cycle", return_value=[]),
+        patch("agent_preditivo.polling.notify_agent_error"),
+    ):
+        run_cycle(include_opportunity=False)
+
+    messages = [record.message for record in caplog.records]
+    assert any("iniciado" in m for m in messages)
+    assert any("concluído com sucesso" in m for m in messages)
