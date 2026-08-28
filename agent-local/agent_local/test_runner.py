@@ -71,6 +71,9 @@ def run_tests_for_service(service: str, repo_dir: str, test_database_url: str) -
         # pode resolver para o alias de app da Microsoft Store, que cria um
         # venv incompleto (sem python.exe copiado) sem erro visivel.
         subprocess.run([sys.executable, "-m", "venv", ".venv"], cwd=service_dir, check=True)
+        venv_python = service_dir / ".venv" / "Scripts" / "python.exe"
+        if not venv_python.exists():
+            venv_python = service_dir / ".venv" / "bin" / "python"
         subprocess.run(
             [str(venv_python), "-m", "pip", "install", "-q", "-r", "requirements.txt"], cwd=service_dir, check=True
         )
