@@ -20,6 +20,7 @@ class AccountDetailResponse(BaseModel):
     id: uuid.UUID
     status: str
     tipo_conta: str
+    saldo: float
     created_at: datetime
 
 

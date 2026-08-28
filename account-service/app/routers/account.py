@@ -37,7 +37,11 @@ def get_account_detail(account_id: uuid.UUID, db: Session = Depends(get_db)) -> 
     filosofia sincrona/provisoria de 05-account-post-sincrono.md."""
     account = get_account(db, account_id)
     return AccountDetailResponse(
-        id=account.id, status=account.status, tipo_conta=account.tipo_conta, created_at=account.created_at
+        id=account.id,
+        status=account.status,
+        tipo_conta=account.tipo_conta,
+        saldo=float(account.saldo),
+        created_at=account.created_at,
     )
 
 

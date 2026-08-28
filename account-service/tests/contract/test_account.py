@@ -160,7 +160,24 @@ def test_get_account_happy_path_returns_status() -> None:
     body = response.json()
     assert body["status"] == "ativa"
     assert body["tipo_conta"] == "corrente"
+    assert body["saldo"] == 10_000.00
     assert "cpf" not in body
+
+
+def test_get_account_reflects_saldo_after_transferencia() -> None:
+    client = TestClient(app)
+    origem = _create_account(client)
+    destino = _create_account(client)
+
+    client.post(
+        "/v1/accounts/transferencias",
+        json={"conta_origem_id": origem["id"], "conta_destino_id": destino["id"], "valor": 100.0},
+    )
+
+    response = client.get(f"/v1/accounts/{origem['id']}")
+
+    assert response.status_code == 200
+    assert response.json()["saldo"] == 9_900.00
 
 
 def test_get_account_not_found_returns_404() -> None:

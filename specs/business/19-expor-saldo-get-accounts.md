@@ -10,9 +10,9 @@ A issue #18 implementou o mecanismo de saldo (transferência atômica, débito/c
 
 ## Critério de aceite
 
-- [ ] Resposta do `GET /v1/accounts/{id}` inclui `saldo`
-- [ ] Teste de contrato cobrindo o novo campo na resposta
-- [ ] Nenhuma mudança em outros campos da resposta já existentes
+- [x] Resposta do `GET /v1/accounts/{id}` inclui `saldo`
+- [x] Teste de contrato cobrindo o novo campo na resposta
+- [x] Nenhuma mudança em outros campos da resposta já existentes
 
 ## Sinal de risco
 
