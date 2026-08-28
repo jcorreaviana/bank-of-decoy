@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, func
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,14 @@ from app.core.db import Base
 
 class Transaction(Base):
     __tablename__ = "transactions"
+    __table_args__ = (
+        # issue #38 (latencia_alta): usado pelas checagens de risco em
+        # app/services/transaction_risk.py (check_destinatario_novo,
+        # check_velocidade_alta, check_entrada_saida_rapida), que filtram
+        # por account_id + tipo (e created_at, nas janelas de tempo) a cada
+        # transacao criada.
+        Index("ix_transactions_account_id_tipo_created_at", "account_id", "tipo", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     e2e_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
