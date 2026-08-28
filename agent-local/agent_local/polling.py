@@ -16,6 +16,7 @@ from agent_local.config import get_settings
 from agent_local.dependency_check import has_open_dependency
 from agent_local.gate import apply_gate, open_pull_request
 from agent_local.github_client import Issue
+from agent_local.logging_config import configure_logging, new_trace_id
 from agent_local.risk_score import calculate_risk_score
 from agent_local.sdk_invocation import build_task_prompt, invoke_sdk
 
@@ -34,12 +35,32 @@ o score de risco vier baixo."""
 
 
 def pick_candidate_issue() -> Issue | None:
-    for issue in github_client.list_candidate_issues():
+    candidates = github_client.list_candidate_issues()
+    logger.info(
+        "Issues candidatas consultadas no board.",
+        extra={
+            "context": {
+                "total_candidatas": len(candidates),
+                "issue_numbers": [issue.number for issue in candidates],
+            }
+        },
+    )
+    for issue in candidates:
         if CHAOS_ORIGIN_LABEL in issue.labels:
+            logger.info(
+                "Issue pulada - origem caos.",
+                extra={"context": {"issue_number": issue.number, "motivo": f"label {CHAOS_ORIGIN_LABEL}"}},
+            )
             continue
         if has_open_dependency(issue.body):
+            logger.info(
+                "Issue pulada - dependência aberta.",
+                extra={"context": {"issue_number": issue.number, "motivo": "dependência ainda aberta"}},
+            )
             continue
+        logger.info("Issue candidata selecionada.", extra={"context": {"issue_number": issue.number}})
         return issue
+    logger.info("Nenhuma issue candidata disponível neste ciclo.")
     return None
 
 
@@ -56,6 +77,10 @@ def _read_spec_text(repo_dir: str, issue_body: str) -> str | None:
 def process_issue(issue: Issue) -> dict:
     settings = get_settings()
 
+    logger.info(
+        "Issue auto-atribuída para processamento.",
+        extra={"context": {"issue_number": issue.number, "title": issue.title}},
+    )
     github_client.assign_self(issue.number)
 
     repo_dir = git_ops.ensure_repo_cloned(settings.repo_url, settings.repo_clone_dir)
@@ -78,6 +103,21 @@ def process_issue(issue: Issue) -> dict:
     coverage_fraction = min(coverage_fractions) if coverage_fractions else 0.0
 
     risk = calculate_risk_score(issue.body, coverage_fraction, diff_stat.lines_changed)
+    logger.info(
+        "Score de risco calculado.",
+        extra={
+            "context": {
+                "issue_number": issue.number,
+                "score": risk.score,
+                "threshold": risk.threshold,
+                "decision": risk.decision,
+                "category": risk.risk_fields.category,
+                "criticality": risk.risk_fields.criticality,
+                "coverage_fraction": risk.coverage_fraction,
+                "diff_lines": risk.diff_lines,
+            }
+        },
+    )
 
     git_ops.push_branch(repo_dir, branch)
     pr_number, pr_url = open_pull_request(issue.number, branch, repo_dir, title=f"{issue.title} (#{issue.number})")
@@ -100,11 +140,19 @@ def run_cycle() -> dict | None:
     evento 4): a notificacao e o alerta para intervencao humana, um daemon
     de polling deve sobreviver a falhas transitorias e tentar de novo no
     proximo ciclo."""
+    new_trace_id()  # um trace_id por ciclo - todos os logs deste ciclo ficam correlacionados
+    logger.info("Ciclo do agent-local iniciado.")
     issue = pick_candidate_issue()
     if issue is None:
+        logger.info("Ciclo do agent-local concluído sem candidata - nenhuma ação tomada.")
         return None
     try:
-        return process_issue(issue)
+        result = process_issue(issue)
+        logger.info(
+            "Ciclo do agent-local concluído.",
+            extra={"context": {"issue_number": issue.number, "decision": result.get("decision")}},
+        )
+        return result
     except Exception as exc:
         logger.error(
             "Erro nao tratado processando issue no agent-local.",
@@ -124,6 +172,7 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = get_settings()
+    configure_logging("agent-local", settings.log_level)
     if args.once:
         result = run_cycle()
         print(result)

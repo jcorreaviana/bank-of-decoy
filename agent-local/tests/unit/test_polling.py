@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import MagicMock, patch
 
 from agent_local.github_client import Issue
@@ -97,3 +98,62 @@ def test_run_cycle_sucesso_nao_notifica_erro() -> None:
 
     assert result == {"issue_number": 42}
     mock_notify.assert_not_called()
+
+
+def test_run_cycle_sem_candidata_loga_info(caplog) -> None:
+    """Issue #33: ciclo sem candidata (caminho feliz, nada a fazer) nao
+    pode ficar silencioso."""
+    with (
+        caplog.at_level(logging.INFO, logger="agent_local.polling"),
+        patch("agent_local.polling.pick_candidate_issue", return_value=None),
+        patch("agent_local.polling.notify_agent_error"),
+    ):
+        run_cycle()
+
+    messages = [record.message for record in caplog.records]
+    assert any("iniciado" in m for m in messages)
+    assert any("sem candidata" in m for m in messages)
+
+
+def test_pick_candidate_issue_loga_motivo_do_skip_por_caos(caplog) -> None:
+    caos_issue = _issue(number=1, labels=["bug", "chaos-test"])
+    issue_real = _issue(number=2, labels=["bug"])
+    with (
+        caplog.at_level(logging.INFO, logger="agent_local.polling"),
+        patch("agent_local.polling.github_client.list_candidate_issues", return_value=[caos_issue, issue_real]),
+        patch("agent_local.polling.has_open_dependency", return_value=False),
+    ):
+        picked = pick_candidate_issue()
+
+    assert picked is not None and picked.number == 2
+    messages = [record.message for record in caplog.records]
+    assert any("origem caos" in m.lower() for m in messages)
+    assert any("selecionada" in m for m in messages)
+
+
+def test_pick_candidate_issue_loga_motivo_do_skip_por_dependencia(caplog) -> None:
+    issue_com_dependencia = _issue(number=2, labels=["bug"])
+    issue_livre = _issue(number=3, labels=["bug"])
+    with (
+        caplog.at_level(logging.INFO, logger="agent_local.polling"),
+        patch(
+            "agent_local.polling.github_client.list_candidate_issues",
+            return_value=[issue_com_dependencia, issue_livre],
+        ),
+        patch("agent_local.polling.has_open_dependency", side_effect=[True, False]),
+    ):
+        pick_candidate_issue()
+
+    messages = [record.message for record in caplog.records]
+    assert any("dependência aberta" in m for m in messages)
+
+
+def test_pick_candidate_issue_loga_quando_nenhuma_candidata(caplog) -> None:
+    with (
+        caplog.at_level(logging.INFO, logger="agent_local.polling"),
+        patch("agent_local.polling.github_client.list_candidate_issues", return_value=[]),
+    ):
+        assert pick_candidate_issue() is None
+
+    messages = [record.message for record in caplog.records]
+    assert any("Nenhuma issue candidata" in m for m in messages)

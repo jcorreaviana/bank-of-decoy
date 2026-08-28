@@ -1,3 +1,4 @@
+import logging
 from unittest.mock import patch
 
 from agent_local.gate import apply_gate
@@ -81,3 +82,42 @@ def test_apply_gate_registra_auditoria_com_campos_corretos() -> None:
     assert kwargs["risk_score"] == 15.5
     assert kwargs["threshold_used"] == 20.0
     assert kwargs["service_criticality"] == "critico"
+
+
+def test_apply_gate_loga_info_com_racional_no_merge_automatico(caplog) -> None:
+    """Issue #33: decisao final do gate (merge automatico ou revisao
+    humana) precisa ficar visivel no log, com o racional completo - hoje
+    so vai para o comentario do PR e para o Discord."""
+    with (
+        caplog.at_level(logging.INFO, logger="agent_local.gate"),
+        patch("agent_local.gate.github_client.comment_pr"),
+        patch("agent_local.gate.github_client.merge_pr"),
+        patch("agent_local.gate.github_client.add_pr_label"),
+        patch("agent_local.gate.agent_ops_db.record_risk_decision"),
+        patch("agent_local.gate.notify_auto_merge"),
+        patch("agent_local.gate.notify_pr_needs_review"),
+    ):
+        apply_gate(issue_number=42, pr_number=7, pr_url="https://github.com/x/y/pull/7", risk=_risk("autonomo"))
+
+    messages = [record.message for record in caplog.records]
+    assert any("Merge automático" in m for m in messages)
+    contexts = [getattr(record, "context", {}) for record in caplog.records]
+    assert any("Score de risco" in ctx.get("racional", "") for ctx in contexts)
+
+
+def test_apply_gate_loga_info_com_racional_na_revisao_humana(caplog) -> None:
+    with (
+        caplog.at_level(logging.INFO, logger="agent_local.gate"),
+        patch("agent_local.gate.github_client.comment_pr"),
+        patch("agent_local.gate.github_client.merge_pr"),
+        patch("agent_local.gate.github_client.add_pr_label"),
+        patch("agent_local.gate.agent_ops_db.record_risk_decision"),
+        patch("agent_local.gate.notify_auto_merge"),
+        patch("agent_local.gate.notify_pr_needs_review"),
+    ):
+        apply_gate(
+            issue_number=42, pr_number=7, pr_url="https://github.com/x/y/pull/7", risk=_risk("humano", score=90.0)
+        )
+
+    messages = [record.message for record in caplog.records]
+    assert any("aguardando revisão humana" in m for m in messages)

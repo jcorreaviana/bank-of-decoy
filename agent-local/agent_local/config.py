@@ -12,6 +12,7 @@ class Settings:
     repo_clone_dir: str
     test_database_host: str
     test_database_port: str
+    log_level: str
 
 
 def get_settings() -> Settings:
@@ -26,4 +27,5 @@ def get_settings() -> Settings:
         repo_clone_dir=os.environ.get("REPO_CLONE_DIR", "./workspace/bank-of-decoy"),
         test_database_host=os.environ.get("TEST_DATABASE_HOST", "localhost"),
         test_database_port=os.environ.get("TEST_DATABASE_PORT", "5433"),
+        log_level=os.environ.get("LOG_LEVEL", "INFO"),
     )

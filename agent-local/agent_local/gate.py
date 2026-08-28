@@ -6,10 +6,14 @@ comentario explicando o score, sem merge.
 Roda inteiramente em codigo deterministico (nunca dentro da invocacao do
 SDK - ver sdk_invocation.py)."""
 
+import logging
+
 from notifications import notify_auto_merge, notify_pr_needs_review
 
 from agent_local import agent_ops_db, github_client
 from agent_local.risk_score import RiskScoreResult
+
+logger = logging.getLogger(__name__)
 
 
 def open_pull_request(issue_number: int, branch: str, repo_dir: str, title: str) -> tuple[int, str]:
@@ -34,12 +38,36 @@ def apply_gate(issue_number: int, pr_number: int, pr_url: str, risk: RiskScoreRe
         github_client.comment_pr(pr_number, f"Score abaixo do threshold - merge automático.\n\n{racional}")
         github_client.merge_pr(pr_number)
         notify_auto_merge(issue_number, pr_number, risk.score, pr_url)
+        logger.info(
+            "Merge automático aplicado.",
+            extra={
+                "context": {
+                    "issue_number": issue_number,
+                    "pr_number": pr_number,
+                    "score": risk.score,
+                    "threshold": risk.threshold,
+                    "racional": racional,
+                }
+            },
+        )
     else:
         github_client.add_pr_label(pr_number, "needs-human-review")
         github_client.comment_pr(
             pr_number, f"Score acima do threshold - aguardando revisão humana.\n\n{racional}"
         )
         notify_pr_needs_review(pr_number, pr_url, risk.score, risk.threshold)
+        logger.info(
+            "PR aguardando revisão humana.",
+            extra={
+                "context": {
+                    "issue_number": issue_number,
+                    "pr_number": pr_number,
+                    "score": risk.score,
+                    "threshold": risk.threshold,
+                    "racional": racional,
+                }
+            },
+        )
 
     agent_ops_db.record_risk_decision(
         issue_number=issue_number,
