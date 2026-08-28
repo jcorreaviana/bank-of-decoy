@@ -1,6 +1,6 @@
 import os
 import uuid
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -11,6 +11,7 @@ from test_safety import require_disposable_database
 
 from app.core.config import get_settings
 from app.main import app
+from app.services import pix_key_service
 
 settings = get_settings()
 
@@ -43,6 +44,11 @@ def _mock_account_response(status_code: int, **overrides) -> httpx.Response:
 
 
 def _patch_account_service(response: httpx.Response | None = None, side_effect: BaseException | None = None):
+    """Faz o patch diretamente no `_client` (httpx.Client persistente,
+    ver comentario em app/services/pix_key_service.py) usado por
+    `_fetch_account`, nao na classe `httpx.Client` inteira - patchear a
+    classe intercetaria tambem as chamadas do proprio `TestClient` (que e
+    subclasse de `httpx.Client`) contra a app sob teste."""
     if response is None and side_effect is None:
         response = _mock_account_response(200)
 
@@ -53,7 +59,7 @@ def _patch_account_service(response: httpx.Response | None = None, side_effect: 
             return response
         raise AssertionError(f"chamada GET upstream inesperada em teste: {url}")
 
-    return patch("httpx.get", side_effect=_dispatch_get)
+    return patch.object(pix_key_service, "_client", spec=httpx.Client, get=Mock(side_effect=_dispatch_get))
 
 
 def _payload(**overrides) -> dict:

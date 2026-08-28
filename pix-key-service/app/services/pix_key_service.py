@@ -16,6 +16,13 @@ logger = get_logger(__name__)
 
 _ACCOUNT_SERVICE_TIMEOUT_SECONDS = 5.0
 
+# Client persistente (nao httpx.get avulso) para reaproveitar conexao/pool
+# TCP entre chamadas - httpx.get() abre um Client novo a cada chamada, que
+# foi a causa raiz do sinal latencia_alta reportado na issue #37 (mesmo
+# padrao do fix da issue #34, so que aqui o recurso caro e a conexao HTTP
+# em vez da cifra Fernet).
+_client = httpx.Client(timeout=_ACCOUNT_SERVICE_TIMEOUT_SECONDS)
+
 
 class AccountNotFoundUpstreamError(Exception):
     """O account-service respondeu 404 - account_id inexistente ou deletado."""
@@ -40,7 +47,7 @@ def _fetch_account(account_id: str, trace_id: str = "") -> dict:
     headers = {"X-Trace-Id": trace_id} if trace_id else {}
 
     try:
-        response = httpx.get(url, headers=headers, timeout=_ACCOUNT_SERVICE_TIMEOUT_SECONDS)
+        response = _client.get(url, headers=headers)
     except httpx.HTTPError as exc:
         logger.error(
             "Falha na chamada sincrona ao account-service.",
