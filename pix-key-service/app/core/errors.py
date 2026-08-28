@@ -52,6 +52,17 @@ class PixKeyNotFoundError(DomainError):
         super().__init__("Chave PIX nao encontrada.")
 
 
+class AccountNotFoundError(DomainError):
+    """Conta referenciada em `account_id` nao existe no account-service
+    (docs/escopo-arquitetura.md - contrato original de POST /v1/pix-keys)."""
+
+    error_code = "ACCOUNT_NOT_FOUND"
+    status_code = 404
+
+    def __init__(self) -> None:
+        super().__init__("Conta nao encontrada.", field="account_id")
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:

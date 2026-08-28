@@ -99,12 +99,15 @@ services:
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql://bank:bank@postgres:5432/pix_key
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      ACCOUNT_SERVICE_URL: http://account-service:8002
       CHAOS_ENABLED: ${PIX_KEY_CHAOS_ENABLED:-false}
       CHAOS_FAILURE_RATE: ${PIX_KEY_CHAOS_FAILURE_RATE:-0.05}
       CHAOS_FAILURE_TYPES: ${PIX_KEY_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
     depends_on:
       postgres:
         condition: service_healthy
+      account-service:
+        condition: service_started
 
   transaction-service:
     build:
