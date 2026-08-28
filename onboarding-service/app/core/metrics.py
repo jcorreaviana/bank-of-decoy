@@ -28,6 +28,23 @@ db_pool_connections_in_use = Gauge(
     registry=registry,
 )
 
+# Metricas de negocio (dashboard v1, specs/business/15-metricas-negocio.md).
+onboarding_resultado_total = Counter(
+    "onboarding_resultado_total",
+    "Total de onboardings classificados, por resultado.",
+    ["resultado"],
+    registry=registry,
+)
+
+risco_sinal_total = Counter(
+    "risco_sinal_total",
+    "Total de ocorrencias de cada sinal de risco (onboarding e transacao - "
+    "mesmo nome de metrica no transaction-service, o label `job` do "
+    "Prometheus distingue a origem).",
+    ["sinal"],
+    registry=registry,
+)
+
 
 def register_db_pool_gauge(engine: Optional[Engine]) -> None:
     if engine is None:

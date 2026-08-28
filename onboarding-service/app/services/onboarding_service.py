@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.crypto import compute_blind_index
 from app.core.errors import CpfAlreadyRegisteredError, OnboardingNotFoundError
 from app.core.logging import get_logger
+from app.core.metrics import onboarding_resultado_total, risco_sinal_total
 from app.models import Onboarding
 from app.repositories import onboarding_repository
 from app.schemas.onboarding import OnboardingCreateRequest
@@ -73,6 +74,10 @@ def create_onboarding(db: Session, payload: OnboardingCreateRequest) -> Onboardi
     onboarding.risco_score = risk.score
     onboarding.risco_sinais = risk.sinais
     db.commit()
+
+    onboarding_resultado_total.labels(resultado=risk.status).inc()
+    for sinal in risk.sinais:
+        risco_sinal_total.labels(sinal=sinal).inc()
 
     logger.info(
         "Onboarding classificado.",
