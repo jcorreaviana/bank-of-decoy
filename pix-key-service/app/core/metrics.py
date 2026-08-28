@@ -28,6 +28,14 @@ db_pool_connections_in_use = Gauge(
     registry=registry,
 )
 
+# Metrica de negocio (dashboard v1, specs/business/15-metricas-negocio.md).
+chave_pix_registrada_total = Counter(
+    "chave_pix_registrada_total",
+    "Total de chaves PIX registradas, por tipo.",
+    ["tipo"],
+    registry=registry,
+)
+
 
 def register_db_pool_gauge(engine: Optional[Engine]) -> None:
     if engine is None:

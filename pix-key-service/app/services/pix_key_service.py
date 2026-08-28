@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.errors import PixKeyAlreadyRegisteredError, PixKeyNotFoundError
 from app.core.logging import get_logger
+from app.core.metrics import chave_pix_registrada_total
 from app.models import PixKey
 from app.repositories import pix_key_repository
 from app.schemas.pix_key import PixKeyCreateRequest
@@ -29,6 +30,8 @@ def create_pix_key(db: Session, payload: PixKeyCreateRequest) -> PixKey:
         raise PixKeyAlreadyRegisteredError() from exc
 
     db.commit()
+
+    chave_pix_registrada_total.labels(tipo=payload.tipo).inc()
 
     logger.info(
         "Chave PIX criada.",
