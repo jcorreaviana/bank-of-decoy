@@ -1,6 +1,6 @@
 import os
 import uuid
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -12,6 +12,7 @@ from test_safety import require_disposable_database
 from app.core.config import get_settings
 from app.core.crypto import encrypt_value
 from app.main import app
+from app.services import onboarding_internal_client
 
 settings = get_settings()
 
@@ -45,10 +46,13 @@ def _mock_onboarding_response(status_code: int, **overrides) -> httpx.Response:
 
 
 def _patch_onboarding_get(response: httpx.Response | None = None, side_effect=None):
-    target = "app.services.onboarding_internal_client.httpx.get"
-    if side_effect is not None:
-        return patch(target, side_effect=side_effect)
-    return patch(target, return_value=response)
+    """Faz o patch diretamente no `_client` (httpx.Client persistente, ver
+    comentario em app/services/onboarding_internal_client.py), nao na
+    classe `httpx.Client` inteira - patchear a classe intercetaria tambem
+    as chamadas do proprio `TestClient` (que e subclasse de
+    `httpx.Client`) contra a app sob teste."""
+    get_mock = Mock(side_effect=side_effect) if side_effect is not None else Mock(return_value=response)
+    return patch.object(onboarding_internal_client, "_client", spec=httpx.Client, get=get_mock)
 
 
 def test_post_account_happy_path_inherits_risco() -> None:

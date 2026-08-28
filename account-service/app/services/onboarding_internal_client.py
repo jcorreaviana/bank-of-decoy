@@ -18,6 +18,12 @@ logger = get_logger(__name__)
 
 _TIMEOUT_SECONDS = 5.0
 
+# Client persistente (nao httpx.get avulso) para reaproveitar conexao/pool
+# TCP entre chamadas - correcao preventiva do mesmo padrao que causou o
+# sinal latencia_alta nas issues #34/#37/#38 (httpx.get() avulso abre um
+# Client novo a cada chamada).
+_client = httpx.Client(timeout=_TIMEOUT_SECONDS)
+
 
 class OnboardingNotFoundUpstreamError(Exception):
     """O onboarding-service respondeu 404 - onboarding_id inexistente ou deletado."""
@@ -39,7 +45,7 @@ def fetch_onboarding_internal(onboarding_id: str, trace_id: str = "") -> dict:
     headers = {"X-Trace-Id": trace_id} if trace_id else {}
 
     try:
-        response = httpx.get(url, headers=headers, timeout=_TIMEOUT_SECONDS)
+        response = _client.get(url, headers=headers)
     except httpx.HTTPError as exc:
         logger.error(
             "Falha na chamada sincrona ao onboarding-service.",
