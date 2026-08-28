@@ -10,6 +10,7 @@ esse servico so precisa cifrar/decifrar, sem indice determinístico.
 """
 
 import os
+from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import String
@@ -23,15 +24,27 @@ def _get_key() -> bytes:
     return key.encode("utf-8")
 
 
+@lru_cache(maxsize=1)
+def _get_fernet() -> Fernet:
+    """Instancia o cipher uma unica vez e reaproveita entre chamadas -
+    construir `Fernet(...)` a partir da chave base64 tem custo mensuravel
+    (decode + setup de AES/HMAC), e `EncryptedString` chama
+    encrypt_value/decrypt_value a cada linha lida/escrita da tabela
+    `accounts` (toda leitura de conta decifra `cpf`, mesmo quando a
+    resposta nao usa o campo, ex. `GET /v1/accounts/{id}` e
+    `transferir_saldo`) - recriar o cipher por chamada era a causa raiz do
+    p95 de latencia elevado detectado no account-service (issue #36),
+    ajuste puramente operacional, sem mudanca de comportamento observavel."""
+    return Fernet(_get_key())
+
+
 def encrypt_value(plaintext: str) -> str:
-    fernet = Fernet(_get_key())
-    return fernet.encrypt(plaintext.encode("utf-8")).decode("utf-8")
+    return _get_fernet().encrypt(plaintext.encode("utf-8")).decode("utf-8")
 
 
 def decrypt_value(ciphertext: str) -> str:
-    fernet = Fernet(_get_key())
     try:
-        return fernet.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+        return _get_fernet().decrypt(ciphertext.encode("utf-8")).decode("utf-8")
     except InvalidToken as exc:
         raise ValueError("Nao foi possivel decifrar o valor - chave incorreta ou dado corrompido.") from exc
 
