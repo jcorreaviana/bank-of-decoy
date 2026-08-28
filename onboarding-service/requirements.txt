@@ -12,3 +12,4 @@ cryptography>=43.0,<44.0
 confluent-kafka>=2.3,<3.0
 -e ../shared/risk_engine
 -e ../shared/test_safety
+-e ../shared/chaos

@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chaos"
+version = "0.1.0"
+description = "Middleware de injecao de falhas simuladas (timeout, 503, 500, latencia) - camada de caos da Fase 2 (specs/business/11-camada-caos.md), compartilhada entre onboarding-service, account-service, pix-key-service e transaction-service."
+requires-python = ">=3.12"
+dependencies = ["starlette"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["chaos*"]

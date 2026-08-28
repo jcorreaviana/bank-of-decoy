@@ -69,8 +69,14 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         trace_id = get_trace_id()
+        context: dict = {"stack_trace": traceback.format_exc()}
+        if getattr(exc, "chaos_injected", False):
+            # Falha injetada pela camada de caos (specs/business/11-camada-caos.md)
+            # propagou ate aqui de proposito, para exercitar este handler
+            # real - marcado para o agente preditivo nao confundir com bug.
+            context["chaos_injected"] = True
         logger.error(
             "Erro interno nao mapeado.",
-            extra={"trace_id": trace_id, "context": {"stack_trace": traceback.format_exc()}},
+            extra={"trace_id": trace_id, "context": context},
         )
         return _error_response(500, "INTERNAL_ERROR", "Erro interno. Tente novamente.", None, trace_id)

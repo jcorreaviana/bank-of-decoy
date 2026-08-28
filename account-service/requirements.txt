@@ -10,3 +10,4 @@ alembic>=1.13,<2.0
 cryptography>=43.0,<44.0
 confluent-kafka>=2.3,<3.0
 -e ../shared/test_safety
+-e ../shared/chaos

@@ -1,3 +1,4 @@
+from chaos import ChaosMiddleware
 from fastapi import FastAPI
 
 from app.core.config import get_settings
@@ -11,6 +12,9 @@ settings = get_settings()
 configure_logging(settings.service_name, settings.log_level)
 
 app = FastAPI(title=settings.service_name)
+# ChaosMiddleware precisa ser o PRIMEIRO add_middleware (fica na camada mais
+# interna) - ver docstring de shared/chaos/chaos/middleware.py.
+app.add_middleware(ChaosMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(MetricsMiddleware)
 register_exception_handlers(app)

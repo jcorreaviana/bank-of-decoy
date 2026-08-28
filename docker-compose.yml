@@ -69,6 +69,12 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       # Dev-only: mesma chave em onboarding-service e account-service (specs/business/10-criptografia-cpf.md).
       CPF_ENCRYPTION_KEY: ${CPF_ENCRYPTION_KEY}
+      # Camada de caos (specs/business/11-camada-caos.md) - toggle
+      # independente por servico, prefixo ONBOARDING_ no host para nao
+      # colidir com os outros 3 servicos. Desligado por padrao.
+      CHAOS_ENABLED: ${ONBOARDING_CHAOS_ENABLED:-false}
+      CHAOS_FAILURE_RATE: ${ONBOARDING_CHAOS_FAILURE_RATE:-0.05}
+      CHAOS_FAILURE_TYPES: ${ONBOARDING_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,6 +99,9 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       ONBOARDING_SERVICE_URL: http://onboarding-service:8001
       CPF_ENCRYPTION_KEY: ${CPF_ENCRYPTION_KEY}
+      CHAOS_ENABLED: ${ACCOUNT_CHAOS_ENABLED:-false}
+      CHAOS_FAILURE_RATE: ${ACCOUNT_CHAOS_FAILURE_RATE:-0.05}
+      CHAOS_FAILURE_TYPES: ${ACCOUNT_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,6 +124,9 @@ services:
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql://bank:bank@postgres:5432/pix_key
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      CHAOS_ENABLED: ${PIX_KEY_CHAOS_ENABLED:-false}
+      CHAOS_FAILURE_RATE: ${PIX_KEY_CHAOS_FAILURE_RATE:-0.05}
+      CHAOS_FAILURE_TYPES: ${PIX_KEY_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
     depends_on:
       postgres:
         condition: service_healthy
@@ -137,6 +149,9 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       ACCOUNT_SERVICE_URL: http://account-service:8002
       PIX_KEY_SERVICE_URL: http://pix-key-service:8003
+      CHAOS_ENABLED: ${TRANSACTION_CHAOS_ENABLED:-false}
+      CHAOS_FAILURE_RATE: ${TRANSACTION_CHAOS_FAILURE_RATE:-0.05}
+      CHAOS_FAILURE_TYPES: ${TRANSACTION_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
     depends_on:
       postgres:
         condition: service_healthy
