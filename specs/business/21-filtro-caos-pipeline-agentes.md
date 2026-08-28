@@ -12,10 +12,10 @@ A camada de caos (issue #13) foi implementada depois do agente preditivo (#15) e
 
 ## Critério de aceite
 
-- [ ] Log com `chaos_injected: true` não conta para o threshold de erro repetido
-- [ ] Issue de bug criada durante caos ativo é marcada como tal (visível no corpo/label)
-- [ ] Agente local pula issues marcadas como originadas de caos
-- [ ] Teste cobrindo o cenário completo: caos ativo → agente preditivo detecta → issue marcada → agente local pula, não tenta corrigir
+- [x] Log com `chaos_injected: true` não conta para o threshold de erro repetido
+- [x] Issue de bug criada durante caos ativo é marcada como tal (visível no corpo/label)
+- [x] Agente local pula issues marcadas como originadas de caos
+- [x] Teste cobrindo o cenário completo: caos ativo → agente preditivo detecta → issue marcada → agente local pula, não tenta corrigir — coberto por testes unitários em cada transição (chaos ativo → `BugSignal.chaos_ativo`, `register_bug` → label `chaos-test` + aviso no corpo, `pick_candidate_issue` → pula issue com essa label) mais checagem ao vivo de `is_chaos_enabled` contra containers reais; não é um único teste de ponta a ponta rodando os dois processos de fato
 
 ## Sinal de risco
 
