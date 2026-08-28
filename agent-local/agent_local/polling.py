@@ -23,9 +23,20 @@ logger = logging.getLogger(__name__)
 
 _SPEC_REF_PATTERN = re.compile(r"`(specs/business/[\w.\-]+\.md)`")
 
+CHAOS_ORIGIN_LABEL = "chaos-test"
+"""Issue de bug criada pelo agent-preditivo enquanto CHAOS_ENABLED estava
+ativo no servico afetado (specs/business/21-filtro-caos-pipeline-agentes.md)
+- e falha simulada, nao bug de codigo. O agente local nunca deve tentar
+"corrigir" isso: nao ha nada errado no codigo para reverter, e o unico
+efeito de tentar seria o agente propor mexer no proprio middleware de caos
+(shared/chaos) e, pior, fazer merge automatico dessa reversao indevida se
+o score de risco vier baixo."""
+
 
 def pick_candidate_issue() -> Issue | None:
     for issue in github_client.list_candidate_issues():
+        if CHAOS_ORIGIN_LABEL in issue.labels:
+            continue
         if has_open_dependency(issue.body):
             continue
         return issue
