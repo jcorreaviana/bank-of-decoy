@@ -31,7 +31,7 @@ Variáveis de ambiente por serviço:
 - [x] Middleware de caos implementado nos 4 serviços, com toggle independente por serviço via variável de ambiente
 - [x] Os 4 tipos de falha implementados e testáveis individualmente
 - [x] `CHAOS_ENABLED=false` é o padrão — nenhum serviço injeta falha sem configuração explícita
-- [ ] Ligar `CHAOS_ENABLED=true` com `CHAOS_FAILURE_RATE` alto (ex. 0.5, só para teste) em um serviço gera taxa de erro/latência visível no dashboard Grafana, confirmando que os golden signals capturam o comportamento — validado via API do Prometheus (aguardando confirmação visual do usuário no Grafana antes de marcar)
+- [x] Ligar `CHAOS_ENABLED=true` com `CHAOS_FAILURE_RATE` alto (ex. 0.5, só para teste) em um serviço gera taxa de erro/latência visível no dashboard Grafana, confirmando que os golden signals capturam o comportamento — validado via API do Prometheus e confirmado visualmente pelo usuário no Grafana (taxa de erro e latência p95)
 - [x] Testes automatizados confirmam que, com o caos desligado, o comportamento normal do serviço não é afetado
 - [x] Documentação clara (README ou spec) de como ativar cada tipo de falha, para uso manual ou pela bateria de validação de agentes
 
