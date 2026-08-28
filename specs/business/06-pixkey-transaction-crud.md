@@ -12,6 +12,7 @@ Request:
 ```
 - `201`: `{ "id": "UUID", "tipo": "string", "valor": "string", "created_at": "timestamp" }`
 - `400`: `error_code: "VALIDATION_ERROR"` — `tipo` fora do enum ou `valor` em formato incompatível com `tipo` (ex. `tipo: "email"` com `valor` que não é email).
+- `404`: `error_code: "ACCOUNT_NOT_FOUND"` — `account_id` não corresponde a conta existente no `account-service` (consulta síncrona a `GET /v1/accounts/{id}`, mesmo padrão do cliente usado por `transaction-service`).
 - `409`: `error_code: "PIX_KEY_ALREADY_REGISTERED"` — `valor` já registrado (não deletado) para qualquer conta.
 
 ### `DELETE /v1/pix-keys/{id}` (pix-key-service)
@@ -48,6 +49,7 @@ Formato de erro conforme [error-handling.md](../tech/error-handling.md) em todos
 
 ## Critério de aceite
 - [ ] `POST /v1/pix-keys` com payload válido cria a chave e retorna `201`.
+- [ ] `POST /v1/pix-keys` com `account_id` inexistente no `account-service` retorna `404` com `error_code: "ACCOUNT_NOT_FOUND"`.
 - [ ] `POST /v1/pix-keys` com `valor` já registrado (chave não deletada) retorna `409`.
 - [ ] `DELETE /v1/pix-keys/{id}` faz soft delete (`deleted_at` preenchido, registro não removido fisicamente) e retorna `204`.
 - [ ] `DELETE /v1/pix-keys/{id}` para id já deletado ou inexistente retorna `404`.
