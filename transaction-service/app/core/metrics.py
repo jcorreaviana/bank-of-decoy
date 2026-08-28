@@ -28,6 +28,36 @@ db_pool_connections_in_use = Gauge(
     registry=registry,
 )
 
+# Metricas de negocio (dashboard v1, specs/business/15-metricas-negocio.md).
+transacao_processada_total = Counter(
+    "transacao_processada_total",
+    "Total de transferencias PIX processadas, por status.",
+    ["status"],
+    registry=registry,
+)
+
+_VALOR_REAIS_BUCKETS = (10, 50, 100, 500, 1_000, 5_000, 10_000, 20_000, 50_000)
+"""Faixas em reais (nao os buckets default do Histogram, pensados para
+duracao em segundos) - cobre desde transacoes pequenas ate acima do
+limiar de valor atipico (VALOR_ATIPICO_LIMIAR=20_000, transaction_risk.py),
+para o histograma mostrar onde a distribuicao real de valor cai."""
+
+transacao_valor_reais = Histogram(
+    "transacao_valor_reais",
+    "Distribuicao do valor (R$) das transferencias PIX processadas.",
+    buckets=_VALOR_REAIS_BUCKETS,
+    registry=registry,
+)
+
+risco_sinal_total = Counter(
+    "risco_sinal_total",
+    "Total de ocorrencias de cada sinal de risco (onboarding e transacao - "
+    "mesmo nome de metrica no onboarding-service, o label `job` do "
+    "Prometheus distingue a origem).",
+    ["sinal"],
+    registry=registry,
+)
+
 
 def register_db_pool_gauge(engine: Optional[Engine]) -> None:
     if engine is None:

@@ -10,6 +10,7 @@ from app.core.errors import (
     SaldoInsuficienteError,
 )
 from app.core.logging import get_logger, get_trace_id
+from app.core.metrics import risco_sinal_total, transacao_processada_total, transacao_valor_reais
 from app.models import Transaction
 from app.repositories import transaction_repository
 from app.schemas.transaction import TransactionCreateRequest
@@ -105,6 +106,11 @@ def create_transaction(db: Session, payload: TransactionCreateRequest) -> Transa
     )
     saida, entrada = transaction_repository.create_par(db, saida, entrada)
     db.commit()
+
+    transacao_processada_total.labels(status=risk.status).inc()
+    transacao_valor_reais.observe(float(payload.valor))
+    for sinal in risk.sinais:
+        risco_sinal_total.labels(sinal=sinal).inc()
 
     logger.info(
         "Transacao criada (partida dobrada).",
