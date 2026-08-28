@@ -1,5 +1,4 @@
-"""Wrapper fino sobre o Ollama local (llama3.2:3b) - mesmo padrao de
-distrito-study/usecases/case-one/agent.py::call_llm, usado tanto pelo
+"""Wrapper fino sobre o Ollama local (llama3.2:3b), usado tanto pelo
 agente preditivo (classificacao bug/oportunidade, julgamento de gap)
 quanto pelo agente de registro (escrita da issue), com system prompts
 diferentes conforme quem chama (specs/business/13-agente-preditivo-registro.md)."""

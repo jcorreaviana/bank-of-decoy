@@ -1,6 +1,5 @@
-"""RAG sobre specs/business/ (mesmo padrao de
-distrito-study/usecases/case-one/ingest.py + tools.py::search_policies):
-chunking por secao (## heading), embeddings locais via sentence-transformers.
+"""RAG sobre specs/business/: chunking por secao (## heading), embeddings
+locais via sentence-transformers.
 
 Indice vetorial: numpy + cosseno, persistido em `.npz`/`.json` locais, em
 vez de ChromaDB. Decisao de implementacao: `chromadb` depende de
@@ -29,13 +28,13 @@ EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 TOP_K = 4
 DISTANCE_THRESHOLD = 4.5
 """Calibrado empiricamente contra specs/business/ real (nao reaproveitado
-de distrito-study: aquele projeto usa ChromaDB, cuja distancia "l2" e o
-QUADRADO da distancia euclidiana - a escala e diferente da norma euclidiana
-pura calculada aqui via numpy). Queries relacionadas ao dominio (ex. "chave
-PIX de destino inexistente") ficaram na faixa 2.7-3.7; uma query fora do
-dominio ("receita de bolo de chocolate") ficou em 5.6+. 4.5 da margem
-segura entre os dois grupos, com a mesma amostra pequena usada em
-distrito-study (sem dataset proprio de perguntas/respostas para
+de um projeto anterior: aquele projeto usa ChromaDB, cuja distancia "l2" e
+o QUADRADO da distancia euclidiana - a escala e diferente da norma
+euclidiana pura calculada aqui via numpy). Queries relacionadas ao dominio
+(ex. "chave PIX de destino inexistente") ficaram na faixa 2.7-3.7; uma
+query fora do dominio ("receita de bolo de chocolate") ficou em 5.6+. 4.5
+da margem segura entre os dois grupos, com a mesma amostra pequena usada
+naquele projeto anterior (sem dataset proprio de perguntas/respostas para
 recalibrar com mais rigor)."""
 
 _embedding_model = None
@@ -64,7 +63,7 @@ def _chunk_by_heading(text: str, file_name: str) -> list[dict]:
 def ingest_specs() -> int:
     """Reindexa todas as specs/business/*.md do zero. Retorna o numero de
     chunks indexados. Rode toda vez que specs/business/ mudar (nao ha
-    invalidacao incremental - mesma simplicidade de distrito-study)."""
+    invalidacao incremental)."""
     chunks: list[dict] = []
     for path in sorted(SPECS_DIR.glob("*.md")):
         if path.name == "README.md":
@@ -92,9 +91,9 @@ def _load_index() -> tuple[np.ndarray, list[dict]]:
 
 def search_specs(query: str, top_k: int = TOP_K, distance_threshold: float = DISTANCE_THRESHOLD) -> list[dict]:
     """Retorna os chunks mais relevantes, cada um com `text`, `file`,
-    `section`, `distance` (distancia euclidiana L2, mesma metrica/escala de
-    distrito-study). Lista vazia se a menor distancia ultrapassar o
-    threshold (nenhum contexto relevante o suficiente)."""
+    `section`, `distance` (distancia euclidiana L2). Lista vazia se a menor
+    distancia ultrapassar o threshold (nenhum contexto relevante o
+    suficiente)."""
     embeddings, chunks = _load_index()
     model = _get_embedding_model()
     query_embedding = np.asarray(model.encode([query])[0], dtype=np.float32)
