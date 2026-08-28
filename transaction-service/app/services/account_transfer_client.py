@@ -19,6 +19,10 @@ logger = get_logger(__name__)
 
 _TIMEOUT_SECONDS = 5.0
 
+# Client persistente (nao httpx.post avulso) - mesma causa raiz do
+# latencia_alta da issue #38 (ver account_client.py).
+_client = httpx.Client(timeout=_TIMEOUT_SECONDS)
+
 
 class SaldoInsuficienteUpstreamError(Exception):
     """O account-service respondeu 422 SALDO_INSUFICIENTE."""
@@ -42,7 +46,7 @@ def transferir_saldo(
     }
 
     try:
-        response = httpx.post(url, json=payload, headers=headers, timeout=_TIMEOUT_SECONDS)
+        response = _client.post(url, json=payload, headers=headers)
     except httpx.HTTPError as exc:
         logger.error(
             "Falha na chamada sincrona ao account-service (transferencia).",

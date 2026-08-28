@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
@@ -11,6 +11,7 @@ from test_safety import require_disposable_database
 
 from app.core.config import get_settings
 from app.main import app
+from app.services import account_client, account_transfer_client, pix_key_client
 
 settings = get_settings()
 
@@ -65,18 +66,34 @@ def _mock_transferencia_response(status_code: int, **overrides) -> httpx.Respons
     return httpx.Response(status_code, json=payload)
 
 
+class _MultiPatch:
+    """Combina varios `unittest.mock.patch`/`patch.object` num unico context
+    manager, mantendo o start/stop preguicoso (so ativa dentro do `with`,
+    igual a um patcher individual)."""
+
+    def __init__(self, *patchers):
+        self._patchers = patchers
+
+    def __enter__(self):
+        return [p.start() for p in self._patchers]
+
+    def __exit__(self, *exc_info):
+        for p in reversed(self._patchers):
+            p.stop()
+
+
 def _patch_upstream_calls(
     account_response: httpx.Response | None = None,
     account_side_effect: BaseException | None = None,
     pix_key_response: httpx.Response | None = None,
     transferencia_response: httpx.Response | None = None,
 ):
-    """`account_client` e `pix_key_client` chamam `httpx.get`/`httpx.post` do
-    MESMO modulo `httpx` compartilhado - `patch("app.services.X.httpx.get")`
-    para modulos diferentes ao mesmo tempo acaba sobrescrevendo um patch com
-    o outro (o `with` mais interno vence), fazendo uma chamada receber a
-    resposta destinada a outra. Um unico patch em `httpx.get`/`httpx.post`
-    com dispatch por URL evita a colisao."""
+    """Faz o patch diretamente no `_client` (httpx.Client persistente, ver
+    comentario nos proprios modulos) de cada cliente REST, nao na classe
+    `httpx.Client` inteira - patchear a classe intercetaria tambem as
+    chamadas do proprio `TestClient` (que e subclasse de `httpx.Client`)
+    contra a app sob teste, alem de colidir entre os tres clientes (todos
+    compartilham a mesma classe `httpx.Client`)."""
     if account_response is None and account_side_effect is None:
         account_response = _mock_account_response(200)
     if pix_key_response is None:
@@ -84,24 +101,26 @@ def _patch_upstream_calls(
     if transferencia_response is None:
         transferencia_response = _mock_transferencia_response(200)
 
-    def _dispatch_get(url, *args, **kwargs):
-        if "/v1/accounts/" in str(url):
-            if account_side_effect is not None:
-                raise account_side_effect
-            return account_response
-        if "/v1/pix-keys/lookup" in str(url):
-            return pix_key_response
-        raise AssertionError(f"chamada GET upstream inesperada em teste: {url}")
+    def _dispatch_account_get(url, *args, **kwargs):
+        if account_side_effect is not None:
+            raise account_side_effect
+        return account_response
 
-    def _dispatch_post(url, *args, **kwargs):
-        if "/v1/accounts/transferencias" in str(url):
-            return transferencia_response
-        raise AssertionError(f"chamada POST upstream inesperada em teste: {url}")
+    def _dispatch_pix_key_get(url, *args, **kwargs):
+        return pix_key_response
 
-    return (
-        patch("httpx.get", side_effect=_dispatch_get),
-        patch("httpx.post", side_effect=_dispatch_post),
+    def _dispatch_transfer_post(url, *args, **kwargs):
+        return transferencia_response
+
+    patch_get = _MultiPatch(
+        patch.object(account_client, "_client", spec=httpx.Client, get=Mock(side_effect=_dispatch_account_get)),
+        patch.object(pix_key_client, "_client", spec=httpx.Client, get=Mock(side_effect=_dispatch_pix_key_get)),
     )
+    patch_post = patch.object(
+        account_transfer_client, "_client", spec=httpx.Client, post=Mock(side_effect=_dispatch_transfer_post)
+    )
+
+    return patch_get, patch_post
 
 
 def _payload(**overrides) -> dict:

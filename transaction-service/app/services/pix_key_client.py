@@ -14,6 +14,10 @@ logger = get_logger(__name__)
 
 _TIMEOUT_SECONDS = 5.0
 
+# Client persistente (nao httpx.get avulso) - mesma causa raiz do
+# latencia_alta da issue #38 (ver account_client.py).
+_client = httpx.Client(timeout=_TIMEOUT_SECONDS)
+
 
 class PixKeyDestinoNotFoundUpstreamError(Exception):
     """O pix-key-service respondeu 404 - pix_key_destino nunca existiu."""
@@ -30,7 +34,7 @@ def fetch_pix_key_by_valor(valor: str, trace_id: str = "") -> dict:
     headers = {"X-Trace-Id": trace_id} if trace_id else {}
 
     try:
-        response = httpx.get(url, params={"valor": valor}, headers=headers, timeout=_TIMEOUT_SECONDS)
+        response = _client.get(url, params={"valor": valor}, headers=headers)
     except httpx.HTTPError as exc:
         logger.error(
             "Falha na chamada sincrona ao pix-key-service.",
