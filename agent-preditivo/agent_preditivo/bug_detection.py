@@ -7,8 +7,9 @@ docs/escopo-arquitetura.md e specs/business/13-agente-preditivo-registro.md:
 - log CRITICAL/ERROR repetido 3+ vezes em 5 min com a mesma mensagem
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from agent_preditivo.chaos_status import is_chaos_enabled
 from agent_preditivo.logs_client import LogEntry, count_repeated_critical_or_error, fetch_logs
 from agent_preditivo.prometheus_client import GoldenSignals, fetch_golden_signals
 
@@ -24,6 +25,13 @@ class BugSignal:
     signal_type: str
     """erro_alto | latencia_alta | saturacao_pool | log_critico_repetido."""
     detail: str
+    chaos_ativo: bool = False
+    """True se CHAOS_ENABLED estava ativo no servico no momento da deteccao
+    (specs/business/21-filtro-caos-pipeline-agentes.md) - o sinal ainda e
+    reportado normalmente (o design pretendido, docs/escopo-arquitetura.md
+    v17, e que o caos dispare os thresholds do agente de bug como teste de
+    ponta a ponta), mas a issue criada a partir dele precisa deixar claro
+    que a causa e falha simulada, nao bug de codigo."""
 
 
 def check_taxa_erro(signals: GoldenSignals) -> BugSignal | None:
@@ -84,4 +92,5 @@ def detect_bugs_for_service(service: str, prometheus_url: str | None = None) -> 
         check_saturacao_pool(signals),
         check_log_repetido(service, entries),
     ]
-    return [signal for signal in found if signal is not None]
+    chaos_ativo = is_chaos_enabled(service)
+    return [replace(signal, chaos_ativo=chaos_ativo) for signal in found if signal is not None]

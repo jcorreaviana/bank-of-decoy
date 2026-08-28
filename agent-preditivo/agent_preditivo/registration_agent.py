@@ -24,6 +24,11 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 BUG_TEMPLATE_PATH = _REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "bug-report.md"
 BUSINESS_STORY_TEMPLATE_PATH = _REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "business-story.md"
 
+CHAOS_ORIGIN_LABEL = "chaos-test"
+"""Mesma label que agent-local/agent_local/polling.py:CHAOS_ORIGIN_LABEL
+usa para pular a issue - as duas pontas precisam concordar no nome
+(specs/business/21-filtro-caos-pipeline-agentes.md)."""
+
 SERVICE_CRITICALITY = {
     "transaction-service": "crítico",
     "pix-key-service": "crítico",
@@ -64,6 +69,17 @@ def format_bug_issue(signal: BugSignal) -> tuple[str, str]:
     fields = _parse_fields(raw, "SINAL_QUE_DISPAROU", "EVIDENCIA")
     criticidade = SERVICE_CRITICALITY.get(signal.service, "baixo")
 
+    aviso_caos = (
+        "\n## ⚠️ Origem: camada de caos\n\n"
+        f"`CHAOS_ENABLED=true` estava ativo em `{signal.service}` no momento da detecção — "
+        "este sinal é falha simulada pela camada de caos "
+        "(`specs/business/11-camada-caos.md`), não um bug de código. "
+        "**Não deve ser corrigido automaticamente**: não há nada errado no código para reverter, "
+        "e o middleware de caos está funcionando como esperado.\n"
+        if signal.chaos_ativo
+        else ""
+    )
+
     title = f"[BUG] {signal.signal_type} em {signal.service}"
     body = f"""## Sinal que disparou
 
@@ -80,7 +96,7 @@ def format_bug_issue(signal: BugSignal) -> tuple[str, str]:
 ## Passos de reprodução (se aplicável)
 
 Detectado automaticamente pelo agente preditivo via Prometheus/logs - sem passos manuais de reprodução.
-
+{aviso_caos}
 ## Sinal de risco (para o score de subida)
 
 Categoria da mudança: operacional
@@ -132,9 +148,12 @@ Nenhuma.
     return title, body
 
 
-def create_issue(title: str, body: str, label: str) -> tuple[int, str]:
+def create_issue(title: str, body: str, label: str, extra_labels: list[str] | None = None) -> tuple[int, str]:
+    args = ["gh", "issue", "create", "--title", title, "--body", body, "--label", label]
+    for extra_label in extra_labels or []:
+        args += ["--label", extra_label]
     result = subprocess.run(
-        ["gh", "issue", "create", "--title", title, "--body", body, "--label", label],
+        args,
         capture_output=True,
         text=True,
         check=True,
@@ -151,7 +170,8 @@ def register_bug(signal: BugSignal) -> int | None:
         return None  # já sinalizado e em aberto - dedup, nao repete a acao
 
     title, body = format_bug_issue(signal)
-    issue_number, url = create_issue(title, body, "bug")
+    extra_labels = [CHAOS_ORIGIN_LABEL] if signal.chaos_ativo else None
+    issue_number, url = create_issue(title, body, "bug", extra_labels=extra_labels)
     agent_ops_db.register_signal(signal.signal_type, signal.service, issue_number=issue_number)
     notify_issue_created(issue_number, title, "bug", url)
     return issue_number

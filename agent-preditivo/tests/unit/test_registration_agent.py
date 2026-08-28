@@ -25,6 +25,34 @@ def test_format_bug_issue_preenche_campos_estruturados_em_codigo() -> None:
     assert "transaction-service (crítico)" in body
 
 
+def test_format_bug_issue_marca_origem_de_caos_quando_chaos_ativo() -> None:
+    signal = BugSignal(
+        service="transaction-service", signal_type="erro_alto", detail="x", chaos_ativo=True
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value="SINAL_QUE_DISPAROU: taxa de erro elevada\nEVIDENCIA: 12% em 5 min",
+    ):
+        _, body = format_bug_issue(signal)
+
+    assert "Origem: camada de caos" in body
+    assert "CHAOS_ENABLED=true" in body
+    assert "Não deve ser corrigido automaticamente" in body
+
+
+def test_format_bug_issue_sem_aviso_de_caos_quando_chaos_inativo() -> None:
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x", chaos_ativo=False)
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value="SINAL_QUE_DISPAROU: x\nEVIDENCIA: y",
+    ):
+        _, body = format_bug_issue(signal)
+
+    assert "Origem: camada de caos" not in body
+
+
 def test_format_bug_issue_usa_detail_como_fallback_se_llm_nao_seguir_formato() -> None:
     signal = BugSignal(service="account-service", signal_type="saturacao_pool", detail="saturacao 90%")
 
@@ -85,6 +113,44 @@ def test_register_bug_cria_issue_e_registra_signal_quando_novo() -> None:
     mock_create.assert_called_once()
     mock_register.assert_called_once_with("erro_alto", "transaction-service", issue_number=42)
     mock_notify.assert_called_once_with(42, "[BUG] erro_alto em transaction-service", "bug", "https://github.com/x/y/issues/42")
+
+
+def test_register_bug_adiciona_label_chaos_test_quando_chaos_ativo() -> None:
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x", chaos_ativo=True)
+
+    with (
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.create_issue",
+            return_value=(42, "https://github.com/x/y/issues/42"),
+        ) as mock_create,
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal"),
+        patch("agent_preditivo.registration_agent.chat", return_value="SINAL_QUE_DISPAROU: x\nEVIDENCIA: y"),
+        patch("agent_preditivo.registration_agent.notify_issue_created"),
+    ):
+        register_bug(signal)
+
+    mock_create.assert_called_once()
+    assert mock_create.call_args.kwargs["extra_labels"] == ["chaos-test"]
+
+
+def test_register_bug_sem_label_extra_quando_chaos_inativo() -> None:
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x", chaos_ativo=False)
+
+    with (
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.create_issue",
+            return_value=(42, "https://github.com/x/y/issues/42"),
+        ) as mock_create,
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal"),
+        patch("agent_preditivo.registration_agent.chat", return_value="SINAL_QUE_DISPAROU: x\nEVIDENCIA: y"),
+        patch("agent_preditivo.registration_agent.notify_issue_created"),
+    ):
+        register_bug(signal)
+
+    mock_create.assert_called_once()
+    assert mock_create.call_args.kwargs["extra_labels"] is None
 
 
 def test_register_opportunity_cria_issue_e_notifica_quando_gap() -> None:

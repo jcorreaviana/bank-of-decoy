@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from agent_preditivo.bug_detection import (
     LIMIAR_LATENCIA_MULTIPLICADOR,
     LIMIAR_LOG_REPETIDO,
@@ -7,6 +9,7 @@ from agent_preditivo.bug_detection import (
     check_log_repetido,
     check_saturacao_pool,
     check_taxa_erro,
+    detect_bugs_for_service,
 )
 from agent_preditivo.logs_client import LogEntry
 from agent_preditivo.prometheus_client import GoldenSignals
@@ -80,3 +83,37 @@ def test_check_log_repetido_dispara_com_repeticao_suficiente() -> None:
 def test_check_log_repetido_ignora_niveis_abaixo_de_error() -> None:
     entries = [_log("WARNING", "algo") for _ in range(10)]
     assert check_log_repetido("transaction-service", entries) is None
+
+
+def test_detect_bugs_for_service_marca_chaos_ativo_em_todos_os_sinais() -> None:
+    """Regressao critica (specs/business/21-filtro-caos-pipeline-agentes.md):
+    o sinal continua sendo detectado normalmente com o caos ligado (isso e
+    o design pretendido, docs/escopo-arquitetura.md v17), mas cada
+    BugSignal precisa carregar chaos_ativo=True para a issue ser marcada."""
+    with (
+        patch(
+            "agent_preditivo.bug_detection.fetch_golden_signals",
+            return_value=_signals(taxa_erro=LIMIAR_TAXA_ERRO + 0.1),
+        ),
+        patch("agent_preditivo.bug_detection.fetch_logs", return_value=[]),
+        patch("agent_preditivo.bug_detection.is_chaos_enabled", return_value=True),
+    ):
+        signals = detect_bugs_for_service("transaction-service")
+
+    assert len(signals) == 1
+    assert signals[0].chaos_ativo is True
+
+
+def test_detect_bugs_for_service_chaos_desligado_nao_marca() -> None:
+    with (
+        patch(
+            "agent_preditivo.bug_detection.fetch_golden_signals",
+            return_value=_signals(taxa_erro=LIMIAR_TAXA_ERRO + 0.1),
+        ),
+        patch("agent_preditivo.bug_detection.fetch_logs", return_value=[]),
+        patch("agent_preditivo.bug_detection.is_chaos_enabled", return_value=False),
+    ):
+        signals = detect_bugs_for_service("transaction-service")
+
+    assert len(signals) == 1
+    assert signals[0].chaos_ativo is False
