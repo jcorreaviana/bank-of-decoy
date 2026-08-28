@@ -73,6 +73,7 @@ services:
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql://bank:bank@postgres:5432/account
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_MAX_RETRIES: ${ACCOUNT_KAFKA_MAX_RETRIES:-3}
       ONBOARDING_SERVICE_URL: http://onboarding-service:8001
       CPF_ENCRYPTION_KEY: ${CPF_ENCRYPTION_KEY}
       CHAOS_ENABLED: ${ACCOUNT_CHAOS_ENABLED:-false}

@@ -2,14 +2,20 @@
 de conexao (mesma categoria de app/core/db.py: fora da exigencia de
 cobertura de specs/tech/testing.md). A regra de negocio testavel (o que
 fazer com o envelope) vive em app/services/onboarding_event_consumer.py.
+
+Poison message (issue #31, specs/business/22-poison-message-kafka.md):
+tratamento delegado ao modulo compartilhado `kafka_dlt` (contador de
+tentativas via header Kafka + dead-letter topic apos o limite) - nunca
+mais um `except Exception` sem commit deixando o offset preso para
+sempre, como no incidente real que originou esta issue.
 """
 
 import json
 import logging
 import threading
-import traceback
 
-from confluent_kafka import Consumer
+from confluent_kafka import Consumer, KafkaException
+from kafka_dlt import get_producer, handle_processing_failure
 
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -22,18 +28,23 @@ _POLL_TIMEOUT_SECONDS = 1.0
 
 
 def _handle_message(consumer: Consumer, msg) -> None:
+    settings = get_settings()
     raw_value = msg.value()
     try:
         envelope = json.loads(raw_value.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
-        # Mensagem ilegivel nunca vai processar em uma proxima tentativa -
-        # commitamos para nao travar o consumo em um "poison pill", mas o
-        # erro fica bem visivel no log (nunca um descarte silencioso).
-        logger.error(
-            "Payload de evento invalido em onboarding.aprovado - mensagem descartada apos falha de parse.",
-            extra={"context": {"erro": str(exc), "raw_length": len(raw_value or b"")}},
+        # Payload que nem chega a ser JSON valido nunca vai suceder em um
+        # novo retry - max_retries=0 forca ida direta ao DLT (preserva o
+        # payload bruto para investigacao) em vez de descartar em silencio.
+        handle_processing_failure(
+            producer=get_producer(settings.kafka_bootstrap_servers),
+            consumer=consumer,
+            msg=msg,
+            topic=TOPIC,
+            error=exc,
+            logger=logger,
+            max_retries=0,
         )
-        consumer.commit(message=msg)
         return
 
     if SessionLocal is None:
@@ -51,31 +62,16 @@ def _handle_message(consumer: Consumer, msg) -> None:
             "Evento onboarding.aprovado processado.",
             extra={"context": {"event_id": envelope.get("event_id"), "resultado": resultado}},
         )
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        # Offset NAO commitado de proposito - falha de consumo fica visivel
-        # no log (stack trace completo), nunca descartada em silencio.
-        # Isso NAO garante reentrega incondicional: se uma mensagem
-        # POSTERIOR na mesma particao for processada com sucesso antes do
-        # consumidor reiniciar, o commit dela avanca o offset do grupo e
-        # "engole" esta falha (Kafka comita um numero de offset, nao um
-        # conjunto esparso de mensagens individuais) - a mensagem original
-        # so e reentregue se o consumidor parar/reiniciar/rebalancear ANTES
-        # disso acontecer. Decisao de escopo: um "stop the world" que
-        # bloqueia o topico inteiro ate a falha ser resolvida garantiria
-        # reentrega sempre, mas trocaria uma falha pontual de uma conta por
-        # uma parada de todo o funil - fora de escopo da issue #7 (mesma
-        # filosofia de nao construir retry sofisticado ja aplicada em
-        # onboarding_internal_client.py/account_client.py). O log ERROR
-        # abaixo e, hoje, a garantia real: visibilidade, nao redelivery.
-        logger.error(
-            "Falha ao processar evento onboarding.aprovado - offset nao commitado.",
-            extra={
-                "context": {
-                    "event_id": envelope.get("event_id"),
-                    "stack_trace": traceback.format_exc(),
-                }
-            },
+        handle_processing_failure(
+            producer=get_producer(settings.kafka_bootstrap_servers),
+            consumer=consumer,
+            msg=msg,
+            topic=TOPIC,
+            error=exc,
+            logger=logger,
+            max_retries=settings.kafka_max_retries,
         )
     finally:
         db.close()
@@ -106,7 +102,23 @@ def run_onboarding_aprovado_consumer(stop_event: threading.Event) -> None:
                 )
                 continue
 
-            _handle_message(consumer, msg)
+            try:
+                _handle_message(consumer, msg)
+            except KafkaException:
+                # kafka_dlt so propaga KafkaException quando o proprio
+                # Kafka falhou ao reenviar/publicar no DLT (broker
+                # inalcancavel, fila cheia) - nao e poison message, e
+                # indisponibilidade de infra. O offset desta mensagem nao
+                # foi commitado (kafka_dlt garante isso), entao ela sera
+                # reprocessada normalmente quando o consumidor se
+                # recuperar/reiniciar - sem isso aqui, uma excecao nao
+                # tratada mataria a thread do consumidor inteira em
+                # silencio (daemon thread, sem supervisor).
+                logger.critical(
+                    "Falha do Kafka ao lidar com poison message - consumidor segue tentando, "
+                    "mensagem atual sera reprocessada.",
+                    extra={"context": {"topic": TOPIC}},
+                )
     finally:
         consumer.close()
         logger.info("Consumidor onboarding.aprovado encerrado.", extra={"context": {"topic": TOPIC}})
