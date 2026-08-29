@@ -121,3 +121,42 @@ Comportamento:
 - Todo log segue o formato de linha única JSON de [specs/tech/logging.md](specs/tech/logging.md), com `trace_id` único por execução do cenário — evidência para a janela de validação da issue #54 e para o artigo.
 
 Testes em `chaos-orchestrator/tests/` (`pytest`, sem precisar do ambiente Docker no ar — timeline exercitada com relógio falso, sem esperar minutos reais).
+
+### Janela de validação orgânica de 2h (issue #54)
+
+`scripts/validation_window.py` é o runbook operacional descrito em [specs/business/24-camada-caos-avancada.md](specs/business/24-camada-caos-avancada.md), seção "Execução orgânica" — sobe o ambiente **efêmero** (`docker-compose.test.yml`, não o principal: consistente com a decisão de v12/v16 do documento de escopo de não misturar tráfego sintético/caos com o dataset persistente de ML, e com a janela anterior já documentada em [docs/licoes-aprendidas-operacao-real.md](docs/licoes-aprendidas-operacao-real.md), que rodou contra o mesmo compose), aplica as migrations dos 5 bancos, inicia o gerador de tráfego sintético (`scripts/synthetic_traffic.py`) e o `chaos-orchestrator` em ciclos repetidos do cenário de cascata de exemplo, por um tempo de relógio configurável.
+
+```bash
+cd scripts
+python -m venv .venv && .venv/Scripts/pip install -r requirements.txt   # (ou .venv/bin/pip fora do Windows)
+
+# janela real de 2h (default) - roda a partir da raiz do repo
+CHAOS_INTERNAL_TOKEN=$CHAOS_INTERNAL_TOKEN scripts/.venv/Scripts/python.exe scripts/validation_window.py
+
+# teste curto antes de rodar a janela real
+CHAOS_INTERNAL_TOKEN=$CHAOS_INTERNAL_TOKEN scripts/.venv/Scripts/python.exe scripts/validation_window.py --duration-minutes 10
+```
+
+O que o script faz, em ordem:
+
+1. `docker compose -f docker-compose.test.yml up -d --build` (pulável com `--skip-up`, para reaproveitar um ambiente já no ar) e espera os 4 serviços responderem `/health`.
+2. `alembic upgrade head` nos 5 serviços (`onboarding-service`, `account-service`, `pix-key-service`, `transaction-service`, `agent-ops-service`) — idempotente, seguro rodar sempre. **Sem isso, o ambiente efêmero recém-criado só tem os 5 bancos vazios** (`infra/postgres/init-databases.sh` cria os bancos, não o schema) — toda chamada à API falharia com 500 (`relation does not exist`), silenciosamente o bastante para passar despercebido numa janela inteira de 2h (mesmo achado já registrado em `docs/licoes-aprendidas-operacao-real.md` para a primeira janela, agora automatizado aqui).
+3. Tira um snapshot das issues candidatas (label `business-story`/`bug`, sem assignee) que já existiam **antes** da janela começar — usado depois para não confundir backlog antigo com atividade gerada por esta execução.
+4. Inicia `synthetic_traffic.py` (roda pela duração inteira da janela, em background) e, em paralelo, `chaos-orchestrator/orchestrator.py` contra `scenarios/account_and_queue_cascade.yaml`, **repetindo o cenário em ciclos** (cada ciclo ~7 min + um intervalo entre ciclos, default 3 min) até o relógio da janela acabar — decisão de repetir em vez de uma única ativação isolada, para gerar volume de sinal suficiente para os agentes ao longo de 2h (uma única cascata de ~7 min deixaria a maior parte da janela sem nenhum estímulo de caos).
+5. Ao fim do relógio (ou em `Ctrl+C`, ver abaixo): para de agendar novo ciclo de caos e sinaliza o gerador de tráfego para parar (`stop_traffic.flag`) — **sem** `docker compose down` e **sem** tocar nos daemons dos agentes (`agent-preditivo`, `agent-local`), que são processos externos, iniciados/parados pelo operador, nunca por este script.
+6. Espera os agentes terminarem: verifica repetidamente (a cada `--poll-interval-seconds`, default 30s) se ainda existe (a) alguma issue candidata **nova** (criada durante a janela, sem `chaos-test`, sem dependência aberta) ainda sem assignee, ou (b) alguma issue aberta atribuída ao agente local ainda sem PR/decisão (sem a label `agent-stuck`) — reaproveita o filtro real de `agent_local.polling.pick_candidate_issue` (mesmo venv do `agent-local`, para não arriscar essa lógica divergir com o tempo) e a busca `gh` por `assignee:@me`. `agent-stuck` (issues #40/#41) conta como estado terminal — um item escalado não vai se resolver sozinho, então não bloqueia o fim da janela. Só declara a janela finalizada depois que "sem pendência" se mantiver estável por uma janela de estabilização (`--settle-window-seconds`, default: maior intervalo de polling entre `agent-local`/`agent-preditivo` + 60s de margem) — cobre o caso de um agente estar no meio de um ciclo exatamente no instante do corte. Não existe teto artificial que aborte essa espera; se ela demorar muito além do esperado, o script só loga um aviso periódico (`--warn-after-seconds`, default 30min) para o operador investigar manualmente, sem cortar nenhum agente.
+7. Imprime um resumo com os pontos exatos para conferir evidência (ver próxima seção) e **encerra sem derrubar o ambiente**.
+
+**Como abortar com segurança no meio da janela**: `Ctrl+C` no terminal onde o script está rodando. O Windows propaga `CTRL_C_EVENT` para todo o console, então o ciclo de caos em andamento (se houver) roda seu próprio desligamento explícito (mesmo mecanismo do `chaos-orchestrator` sozinho, acima) antes de sair; o script grava o `stop_traffic.flag` e segue direto para o passo 6 (espera dos agentes) em vez de sair imediatamente — o ambiente nunca é derrubado e nenhum agente é interrompido por causa do abort. Um segundo `Ctrl+C` durante a própria espera (passo 6) só encerra o script — o ambiente e os agentes continuam rodando por conta própria, sem serem afetados.
+
+### Onde encontrar as evidências ao final da janela
+
+O resumo impresso ao final já traz os comandos prontos; os mesmos pontos, para referência:
+
+- **Grafana** (`admin`/`admin`): `http://localhost:3000/d/fase1-golden-signals` (golden signals) e `http://localhost:3000/d/metricas-negocio-v1` (métricas de negócio) — golpe visual da rampa de `degradacao_progressiva`, taxa de erro, latência p95 durante os ciclos de caos.
+- **Postgres `agent_ops`**: `docker exec bank-of-decoy-postgres psql -U bank -d agent_ops -c "SELECT * FROM risk_decisions ORDER BY decided_at;"` e o mesmo para `flagged_signals` — decisões do agente local e sinais deduplicados do agente preditivo durante a janela.
+- **Issues no GitHub**: `gh issue list --search "created:>=<data> label:business-story,bug,chaos-test"` — inclui as issues `chaos-test` (esperado que fiquem sem PR, o agente local as ignora de propósito) e as issues reais de bug/oportunidade abertas a partir dos sinais da janela.
+- **Logs estruturados dos serviços**: `docker compose -f docker-compose.test.yml logs --since <inicio-da-janela> <servico>` (JSON de uma linha, `specs/tech/logging.md`).
+- **Logs desta execução**: `scripts/validation_window_logs/<timestamp>/` — log do gerador de tráfego e de cada ciclo do `chaos-orchestrator`.
+
+Testes em `scripts/tests/test_validation_window.py` cobrem só a lógica pura (decisão de "há pendência?", leitura de intervalo do `.env`) com `pytest`, sem depender de `gh`/Docker reais — a parte que fala com o mundo real foi validada manualmente contra o ambiente e o GitHub reais (ambiente efêmero + uma issue de teste real criada/atribuída/fechada para confirmar a detecção, depois removida).

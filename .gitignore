@@ -8,5 +8,6 @@ __pycache__/
 htmlcov/
 *.egg-info/
 scripts/*.log
+scripts/validation_window_logs/
 rag_index/
 agent-local/workspace/
