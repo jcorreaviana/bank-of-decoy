@@ -140,8 +140,15 @@ def build_task_prompt(issue_number: int, issue_title: str, issue_body: str, spec
 
 
 def invoke_sdk(
-    prompt: str, cwd: str, model: str, max_turns: int, effort: str = "medium"
+    prompt: str, cwd: str, model: str, max_turns: int, timeout_seconds: float, effort: str = "medium"
 ) -> SDKInvocationResult:
+    """`timeout_seconds` e obrigatorio (nao tem default) de proposito -
+    specs/tech/error-handling.md exige timeout explicito em toda chamada ao
+    SDK dentro de `process_issue`, para garantir que o `finally`/`except` do
+    ciclo de vida pos-`assign_self` seja alcancado mesmo se o SDK travar sem
+    lancar excecao (ex. processo do CLI pendurado). `anyio.fail_after`
+    cancela a operacao em andamento e levanta `TimeoutError` mesmo nesse
+    caso, ao contrario de so confiar em o SDK eventualmente lancar algo."""
     options = ClaudeAgentOptions(
         model=model,
         effort=effort,
@@ -156,11 +163,12 @@ def invoke_sdk(
         result_text = ""
         total_cost_usd = None
         session_id = None
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, ResultMessage):
-                result_text = message.result or ""
-                total_cost_usd = message.total_cost_usd
-                session_id = message.session_id
+        with anyio.fail_after(timeout_seconds):
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, ResultMessage):
+                    result_text = message.result or ""
+                    total_cost_usd = message.total_cost_usd
+                    session_id = message.session_id
         return SDKInvocationResult(
             success=bool(result_text),
             result_text=result_text,

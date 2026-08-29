@@ -1,6 +1,9 @@
-import anyio
+from unittest.mock import patch
 
-from agent_local.sdk_invocation import ALLOWED_TOOLS, _deny_out_of_scope_tools, build_task_prompt
+import anyio
+import pytest
+
+from agent_local.sdk_invocation import ALLOWED_TOOLS, _deny_out_of_scope_tools, build_task_prompt, invoke_sdk
 
 
 def test_allowed_tools_nunca_inclui_push_ou_pr() -> None:
@@ -82,3 +85,19 @@ def test_deny_bloqueia_ferramentas_nao_read_edit_bash() -> None:
     for tool_name in ["Write", "Glob", "Grep", "WebFetch", "WebSearch"]:
         result = _call_deny(tool_name, {})
         assert type(result).__name__ == "PermissionResultDeny", f"deveria bloquear: {tool_name}"
+
+
+def test_invoke_sdk_timeout_explicito_levanta_timeout_mesmo_sem_excecao_do_sdk() -> None:
+    """specs/tech/error-handling.md: toda chamada ao SDK dentro de
+    process_issue precisa de timeout explicito, para garantir que o
+    tratamento pos-falha seja alcancado mesmo se o SDK travar sem lancar
+    excecao nenhuma - simulado aqui com um `query` que nunca produz uma
+    ResultMessage dentro da janela de timeout."""
+
+    async def _hanging_query(*, prompt, options):
+        await anyio.sleep(10)
+        yield  # pragma: no cover - nunca alcancado, timeout dispara antes
+
+    with patch("agent_local.sdk_invocation.query", _hanging_query):
+        with pytest.raises(TimeoutError):
+            invoke_sdk("prompt", cwd=".", model="m", max_turns=1, timeout_seconds=0.05)

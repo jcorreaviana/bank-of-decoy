@@ -7,6 +7,8 @@ class Settings:
     interval_seconds: int
     model: str
     max_turns: int
+    sdk_timeout_seconds: float
+    max_consecutive_failures: int
     agent_ops_database_url: str
     repo_url: str
     repo_clone_dir: str
@@ -20,6 +22,8 @@ def get_settings() -> Settings:
         interval_seconds=int(os.environ.get("AGENT_LOCAL_INTERVAL_SECONDS", "300")),
         model=os.environ.get("AGENT_LOCAL_MODEL", "claude-sonnet-5"),
         max_turns=int(os.environ.get("AGENT_LOCAL_MAX_TURNS", "50")),
+        sdk_timeout_seconds=float(os.environ.get("AGENT_LOCAL_SDK_TIMEOUT_SECONDS", "1800")),
+        max_consecutive_failures=int(os.environ.get("AGENT_LOCAL_MAX_CONSECUTIVE_FAILURES", "3")),
         agent_ops_database_url=os.environ.get(
             "AGENT_OPS_DATABASE_URL", "postgresql://bank:bank@localhost:5432/agent_ops"
         ),

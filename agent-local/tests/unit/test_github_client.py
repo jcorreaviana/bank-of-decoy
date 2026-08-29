@@ -1,7 +1,16 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from agent_local.github_client import Issue, create_pr, is_issue_open, list_candidate_issues, view_issue
+from agent_local.github_client import (
+    Issue,
+    add_issue_label,
+    create_pr,
+    is_issue_open,
+    list_candidate_issues,
+    remove_issue_label,
+    unassign_self,
+    view_issue,
+)
 
 
 def _mock_run(stdout: str) -> MagicMock:
@@ -75,3 +84,27 @@ def test_create_pr_retorna_numero_e_url() -> None:
 
     assert pr_number == 25
     assert url == "https://github.com/x/y/pull/25"
+
+
+def test_unassign_self_remove_o_proprio_usuario() -> None:
+    with patch("agent_local.github_client.subprocess.run", return_value=_mock_run("")) as mock_run:
+        unassign_self(42)
+
+    args = mock_run.call_args.args[0]
+    assert args == ["gh", "issue", "edit", "42", "--remove-assignee", "@me"]
+
+
+def test_add_issue_label() -> None:
+    with patch("agent_local.github_client.subprocess.run", return_value=_mock_run("")) as mock_run:
+        add_issue_label(42, "agent-stuck")
+
+    args = mock_run.call_args.args[0]
+    assert args == ["gh", "issue", "edit", "42", "--add-label", "agent-stuck"]
+
+
+def test_remove_issue_label() -> None:
+    with patch("agent_local.github_client.subprocess.run", return_value=_mock_run("")) as mock_run:
+        remove_issue_label(42, "agent-retry-1")
+
+    args = mock_run.call_args.args[0]
+    assert args == ["gh", "issue", "edit", "42", "--remove-label", "agent-retry-1"]

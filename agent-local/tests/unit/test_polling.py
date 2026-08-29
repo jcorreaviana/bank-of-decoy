@@ -1,8 +1,16 @@
 import logging
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from agent_local.github_client import Issue
-from agent_local.polling import pick_candidate_issue, run_cycle
+from agent_local.polling import (
+    AGENT_STUCK_LABEL,
+    _current_retry_count,
+    pick_candidate_issue,
+    process_issue,
+    run_cycle,
+)
 
 
 def _issue(number: int = 42, labels: list[str] | None = None) -> Issue:
@@ -157,3 +165,87 @@ def test_pick_candidate_issue_loga_quando_nenhuma_candidata(caplog) -> None:
 
     messages = [record.message for record in caplog.records]
     assert any("Nenhuma issue candidata" in m for m in messages)
+
+
+def _settings(max_consecutive_failures: int = 3) -> MagicMock:
+    """`process_issue` so precisa de `max_consecutive_failures` antes de
+    `git_ops.ensure_repo_cloned` ser chamado nesses testes (que ja falha de
+    proposito) - os demais campos de Settings nunca sao lidos."""
+    settings = MagicMock()
+    settings.max_consecutive_failures = max_consecutive_failures
+    return settings
+
+
+def test_current_retry_count_le_label_de_retry() -> None:
+    assert _current_retry_count(["bug", "agent-retry-2"]) == 2
+
+
+def test_current_retry_count_sem_label_e_zero() -> None:
+    assert _current_retry_count(["bug", "chaos-test"]) == 0
+
+
+def test_process_issue_falha_generica_desatribui_comenta_e_marca_retry() -> None:
+    """Destino 3 (specs/tech/error-handling.md): uma excecao nao tratada
+    apos assign_self precisa desatribuir a issue, comentar o motivo e
+    devolve-la a fila - nunca deixa-la presa, atribuida e silenciosa."""
+    issue = _issue(number=42, labels=["bug"])
+    with (
+        patch("agent_local.polling.get_settings", return_value=_settings(max_consecutive_failures=3)),
+        patch("agent_local.polling.github_client.assign_self") as mock_assign,
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", side_effect=RuntimeError("SDK indisponível")),
+        patch("agent_local.polling.github_client.add_issue_label") as mock_add_label,
+        patch("agent_local.polling.github_client.remove_issue_label") as mock_remove_label,
+        patch("agent_local.polling.github_client.comment_issue") as mock_comment,
+        patch("agent_local.polling.github_client.unassign_self") as mock_unassign,
+    ):
+        with pytest.raises(RuntimeError):
+            process_issue(issue)
+
+    mock_assign.assert_called_once_with(42)
+    mock_add_label.assert_called_once_with(42, "agent-retry-1")
+    mock_remove_label.assert_not_called()
+    mock_comment.assert_called_once()
+    assert "SDK indisponível" in mock_comment.call_args.args[1]
+    mock_unassign.assert_called_once_with(42)
+
+
+def test_process_issue_escala_ao_atingir_teto_de_falhas_consecutivas() -> None:
+    """Terceira falha consecutiva (teto=3) nao deve devolver a issue a
+    fila - deve escalar via label `agent-stuck` e permanecer atribuida
+    (specs/tech/error-handling.md, "evitando um loop de retry sem teto")."""
+    issue = _issue(number=7, labels=["bug", "agent-retry-2"])
+    with (
+        patch("agent_local.polling.get_settings", return_value=_settings(max_consecutive_failures=3)),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", side_effect=RuntimeError("falha persistente")),
+        patch("agent_local.polling.github_client.add_issue_label") as mock_add_label,
+        patch("agent_local.polling.github_client.remove_issue_label") as mock_remove_label,
+        patch("agent_local.polling.github_client.comment_issue") as mock_comment,
+        patch("agent_local.polling.github_client.unassign_self") as mock_unassign,
+    ):
+        with pytest.raises(RuntimeError):
+            process_issue(issue)
+
+    mock_remove_label.assert_called_once_with(7, "agent-retry-2")
+    mock_add_label.assert_called_once_with(7, AGENT_STUCK_LABEL)
+    mock_comment.assert_called_once()
+    mock_unassign.assert_not_called()  # fica atribuida de proposito - e o que a mantem fora da fila
+
+
+def test_process_issue_propaga_excecao_original_mesmo_se_limpeza_falhar(caplog) -> None:
+    """Pior caso: ate a limpeza pos-falha (unassign/comment) falha (ex. `gh`
+    indisponivel). A excecao original nao pode ser mascarada - so logada
+    como critica para investigacao manual."""
+    issue = _issue(number=9, labels=[])
+    with (
+        caplog.at_level(logging.CRITICAL, logger="agent_local.polling"),
+        patch("agent_local.polling.get_settings", return_value=_settings(max_consecutive_failures=3)),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", side_effect=RuntimeError("falha original")),
+        patch("agent_local.polling.github_client.add_issue_label", side_effect=RuntimeError("gh indisponível")),
+    ):
+        with pytest.raises(RuntimeError, match="falha original"):
+            process_issue(issue)
+
+    messages = [record.message for record in caplog.records]
+    assert any("presa" in m for m in messages)

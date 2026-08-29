@@ -79,6 +79,22 @@ def assign_self(number: int) -> None:
     _run(["issue", "edit", str(number), "--add-assignee", "@me"])
 
 
+def unassign_self(number: int) -> None:
+    """Remove o assignee do agente - unico mecanismo que faz uma issue
+    voltar a aparecer em `list_candidate_issues` (filtro `no:assignee`),
+    ver specs/tech/error-handling.md, secao "Ciclo de vida de
+    auto-atribuicao de agentes autonomos"."""
+    _run(["issue", "edit", str(number), "--remove-assignee", "@me"])
+
+
+def add_issue_label(number: int, label: str) -> None:
+    _run(["issue", "edit", str(number), "--add-label", label])
+
+
+def remove_issue_label(number: int, label: str) -> None:
+    _run(["issue", "edit", str(number), "--remove-label", label])
+
+
 def comment_issue(number: int, body: str) -> None:
     _run(["issue", "comment", str(number), "--body", body])
 
