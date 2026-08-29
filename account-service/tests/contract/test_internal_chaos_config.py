@@ -64,6 +64,11 @@ def test_config_change_takes_effect_without_restarting_the_process(monkeypatch) 
         "failure_rate": 1.0,
         "failure_types": ["503"],
         "expires_at": None,
+        "ramp_ceiling_seconds": 3.0,
+        "ramp_window_seconds": 300.0,
+        "lag_increment_ms": 200.0,
+        "lag_ceiling_ms": 5000.0,
+        "kafka_delay_seconds": 3.0,
     }
 
     after = client.get(account_url)

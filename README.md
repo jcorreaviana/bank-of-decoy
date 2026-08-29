@@ -68,4 +68,21 @@ curl -X POST http://localhost:8002/internal/chaos/config \
   -d '{"enabled": true, "failure_rate": 1.0, "failure_types": ["503"], "duration_seconds": 300}'
 ```
 
+### Novos tipos de falha (issue #52)
+
+Além de `timeout`/`503`/`500`/`latencia` (constantes), a Fase 2b adiciona 4 tipos com parâmetros próprios, ajustáveis no mesmo `POST /internal/chaos/config`:
+
+- `degradacao_progressiva`: latência HTTP que cresce de 0 até `ramp_ceiling_seconds` ao longo de `ramp_window_seconds` desde a ativação — diferente de `latencia` (constante), testa detecção de tendência, não só limiar.
+- `payload_corrompido_sutil`: corrompe silenciosamente um campo específico da resposta de rotas conhecidas (ex. `saldo` vira string em `GET /v1/accounts/{id}`, `ativa` é forçado a `true` em `GET /v1/pix-keys/lookup`) — passa validação, propaga inconsistência sem erro explícito.
+- `kafka_lag` (só no `account-service`, consumer de `onboarding.aprovado`): atraso crescente antes de processar cada mensagem afetada, `lag_increment_ms` por vez até `lag_ceiling_ms` — nunca para de consumir, simula backlog.
+- `kafka_delay` (só no `onboarding-service`, producer): atraso fixo `kafka_delay_seconds` antes de cada publish — simula latência da infraestrutura de mensageria.
+
+```bash
+# rampa de latencia de 0 a 2s em 60s no account-service
+curl -X POST http://localhost:8002/internal/chaos/config \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: $CHAOS_INTERNAL_TOKEN" \
+  -d '{"enabled": true, "failure_rate": 1.0, "failure_types": ["degradacao_progressiva"], "ramp_ceiling_seconds": 2.0, "ramp_window_seconds": 60}'
+```
+
 Sem `duration_seconds`, o override vale até o próximo `POST` ou até o processo reiniciar (nesse caso as variáveis de ambiente voltam a valer como fallback).

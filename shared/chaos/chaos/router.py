@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from chaos.internal_auth import is_internal_request_authorized
 from chaos.known_types import KNOWN_FAILURE_TYPES
-from chaos.runtime_config import ChaosRuntimeOverride, set_runtime_override
+from chaos.runtime_config import ChaosRuntimeOverride, ChaosTypeParams, set_runtime_override
 
 router = APIRouter()
 
@@ -48,6 +48,18 @@ class ChaosConfigRequest(BaseModel):
     # processo).
     duration_seconds: float | None = Field(default=None, gt=0)
 
+    # degradacao_progressiva (issue #52): rampa de 0 ate ramp_ceiling_seconds
+    # ao longo de ramp_window_seconds, contados a partir deste POST.
+    ramp_ceiling_seconds: float = Field(default=3.0, gt=0.0)
+    ramp_window_seconds: float = Field(default=300.0, gt=0.0)
+
+    # kafka_lag (issue #52): incremento por mensagem afetada, ate o teto.
+    lag_increment_ms: float = Field(default=200.0, ge=0.0)
+    lag_ceiling_ms: float = Field(default=5000.0, gt=0.0)
+
+    # kafka_delay (issue #52): atraso fixo antes do publish.
+    kafka_delay_seconds: float = Field(default=3.0, ge=0.0)
+
     @field_validator("failure_types")
     @classmethod
     def _only_known_types(cls, value: list[str]) -> list[str]:
@@ -62,6 +74,11 @@ class ChaosConfigResponse(BaseModel):
     failure_rate: float
     failure_types: list[str]
     expires_at: float | None
+    ramp_ceiling_seconds: float
+    ramp_window_seconds: float
+    lag_increment_ms: float
+    lag_ceiling_ms: float
+    kafka_delay_seconds: float
 
 
 @router.post(
@@ -71,17 +88,30 @@ class ChaosConfigResponse(BaseModel):
 )
 def post_chaos_config(payload: ChaosConfigRequest) -> ChaosConfigResponse:
     failure_types = payload.failure_types or list(KNOWN_FAILURE_TYPES)
+    params = ChaosTypeParams(
+        ramp_ceiling_seconds=payload.ramp_ceiling_seconds,
+        ramp_window_seconds=payload.ramp_window_seconds,
+        lag_increment_ms=payload.lag_increment_ms,
+        lag_ceiling_ms=payload.lag_ceiling_ms,
+        kafka_delay_seconds=payload.kafka_delay_seconds,
+    )
     override: ChaosRuntimeOverride = set_runtime_override(
         enabled=payload.enabled,
         failure_rate=payload.failure_rate,
         failure_types=failure_types,
         duration_seconds=payload.duration_seconds,
+        params=params,
     )
     return ChaosConfigResponse(
         enabled=override.enabled,
         failure_rate=override.failure_rate,
         failure_types=override.failure_types,
         expires_at=override.expires_at,
+        ramp_ceiling_seconds=override.params.ramp_ceiling_seconds,
+        ramp_window_seconds=override.params.ramp_window_seconds,
+        lag_increment_ms=override.params.lag_increment_ms,
+        lag_ceiling_ms=override.params.lag_ceiling_ms,
+        kafka_delay_seconds=override.params.kafka_delay_seconds,
     )
 
 

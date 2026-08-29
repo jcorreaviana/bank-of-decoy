@@ -1,8 +1,18 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
+from chaos import kafka_chaos
+from chaos.runtime_config import clear_runtime_override, set_runtime_override
 from confluent_kafka import KafkaException
 
 from app.core import kafka_consumer
+
+
+@pytest.fixture(autouse=True)
+def _clean_chaos_runtime_override():
+    clear_runtime_override()
+    yield
+    clear_runtime_override()
 
 
 def _msg(value: bytes = b'{"event_id": "e1"}') -> MagicMock:
@@ -102,6 +112,61 @@ def test_handle_message_sem_database_url_nao_aciona_dlt_nem_commita():
 
     mock_dlt.assert_not_called()
     consumer.commit.assert_not_called()
+
+
+def test_run_consumer_applies_growing_kafka_lag_delay_without_stopping_consumption(monkeypatch):
+    """kafka_lag real (issue #52, specs/business/24-camada-caos-avancada.md)
+    - a decisao de caos (chaos/kafka_chaos.py) NAO e mockada aqui, so o
+    Kafka em si (Consumer/_handle_message, mesmo limite dos outros testes
+    deste arquivo) e time.sleep (para o teste nao esperar de verdade).
+    Confirma que o consumer real continua consumindo (chama
+    _handle_message a cada mensagem) e que o atraso cresce mensagem a
+    mensagem, sem travar."""
+    set_runtime_override(enabled=True, failure_rate=1.0, failure_types=["kafka_lag"], duration_seconds=None)
+    monkeypatch.setattr(kafka_chaos.random, "random", lambda: 0.0)
+
+    stop_event = MagicMock()
+    stop_event.is_set.side_effect = [False, False, False, True]
+
+    consumer_instance = MagicMock()
+    msg = _msg()
+    msg.error.return_value = None
+    consumer_instance.poll.return_value = msg
+
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(kafka_consumer.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    with (
+        patch("app.core.kafka_consumer.Consumer", return_value=consumer_instance),
+        patch("app.core.kafka_consumer._handle_message") as mock_handle,
+    ):
+        kafka_consumer.run_onboarding_aprovado_consumer(stop_event)
+
+    assert mock_handle.call_count == 3
+    assert len(sleep_calls) == 3
+    assert sleep_calls[0] < sleep_calls[1] < sleep_calls[2]
+
+
+def test_run_consumer_does_not_delay_when_kafka_lag_not_active(monkeypatch):
+    stop_event = MagicMock()
+    stop_event.is_set.side_effect = [False, True]
+
+    consumer_instance = MagicMock()
+    msg = _msg()
+    msg.error.return_value = None
+    consumer_instance.poll.return_value = msg
+
+    sleep_calls: list[float] = []
+    monkeypatch.setattr(kafka_consumer.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    with (
+        patch("app.core.kafka_consumer.Consumer", return_value=consumer_instance),
+        patch("app.core.kafka_consumer._handle_message") as mock_handle,
+    ):
+        kafka_consumer.run_onboarding_aprovado_consumer(stop_event)
+
+    mock_handle.assert_called_once()
+    assert sleep_calls == []
 
 
 def test_run_consumer_sobrevive_a_kafka_exception_do_dlt_sem_matar_a_thread():

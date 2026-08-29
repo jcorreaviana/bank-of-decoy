@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 import random
+import time
 import uuid
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -35,7 +36,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Match
 
 from chaos.known_types import KNOWN_FAILURE_TYPES as _KNOWN_FAILURE_TYPES
-from chaos.runtime_config import get_runtime_override
+from chaos.payload_corruption import maybe_corrupt_response
+from chaos.runtime_config import get_activation_time, get_active_type_params, get_runtime_override
 
 logger = logging.getLogger("chaos")
 
@@ -100,6 +102,21 @@ def _assign_route_template(request: Request) -> None:
             return
 
 
+def _degradacao_progressiva_delay_seconds() -> float:
+    """Rampa de 0 ate ramp_ceiling_seconds ao longo de
+    ramp_window_seconds, contados desde a ativacao (chaos/runtime_config.py
+    - reinicia a cada POST /internal/chaos/config). Diferente de
+    `latencia` (delay constante), aqui o delay cresce com o tempo -
+    testa deteccao de tendencia no golden signal, nao so limiar
+    (specs/business/24-camada-caos-avancada.md)."""
+    params = get_active_type_params()
+    if params.ramp_window_seconds <= 0:
+        return params.ramp_ceiling_seconds
+    elapsed = time.monotonic() - get_activation_time()
+    progress = min(max(elapsed, 0.0) / params.ramp_window_seconds, 1.0)
+    return progress * params.ramp_ceiling_seconds
+
+
 def _load_config() -> tuple[bool, float, list[str]]:
     override = get_runtime_override()
     if override is not None:
@@ -131,6 +148,16 @@ class ChaosMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         failure_type = random.choice(failure_types)
+
+        if failure_type in ("kafka_lag", "kafka_delay"):
+            # Tipos exclusivos dos pontos de integracao Kafka
+            # (chaos/kafka_chaos.py, consultado direto pelo producer/
+            # consumer) - nao fazem sentido para uma requisicao HTTP
+            # generica escolhida aqui. Sai ANTES do log abaixo: nada foi
+            # de fato injetado nesta requisicao, entao logar
+            # "chaos_injected" aqui seria enganoso.
+            return await call_next(request)
+
         trace_id = request.headers.get("X-Trace-Id") or str(uuid.uuid4())
 
         logger.warning(
@@ -174,6 +201,20 @@ class ChaosMiddleware(BaseHTTPMiddleware):
                     "trace_id": trace_id,
                 },
             )
+
+        if failure_type == "degradacao_progressiva":
+            await asyncio.sleep(_degradacao_progressiva_delay_seconds())
+            return await call_next(request)
+
+        if failure_type == "payload_corrompido_sutil":
+            response = await call_next(request)
+            # FastAPI atribui request.scope["route"] sozinho ao rotear de
+            # verdade (fastapi/routing.py), mas isso nao e garantia da
+            # ASGI spec nem do Starlette puro - mesmo fallback defensivo
+            # ja usado nos curto-circuitos acima, agora depois do
+            # call_next em vez de antes.
+            _assign_route_template(request)
+            return await maybe_corrupt_response(request, response)
 
         # failure_type == "500"
         _assign_route_template(request)

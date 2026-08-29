@@ -13,7 +13,9 @@ sempre, como no incidente real que originou esta issue.
 import json
 import logging
 import threading
+import time
 
+from chaos import maybe_kafka_lag_delay_seconds
 from confluent_kafka import Consumer, KafkaException
 from kafka_dlt import get_producer, handle_processing_failure
 
@@ -101,6 +103,13 @@ def run_onboarding_aprovado_consumer(stop_event: threading.Event) -> None:
                     extra={"context": {"kafka_error": str(msg.error())}},
                 )
                 continue
+
+            # Chaos kafka_lag (issue #52, specs/business/24-camada-caos-avancada.md):
+            # atraso crescente antes de processar, sem parar de consumir -
+            # simula backlog, nao perda de mensagem.
+            delay = maybe_kafka_lag_delay_seconds()
+            if delay:
+                time.sleep(delay)
 
             try:
                 _handle_message(consumer, msg)

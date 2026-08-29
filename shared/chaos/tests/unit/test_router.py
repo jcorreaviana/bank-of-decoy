@@ -81,7 +81,50 @@ def test_post_with_correct_token_updates_config_and_returns_it(monkeypatch):
 
     assert response.status_code == 200
     body = response.json()
-    assert body == {"enabled": True, "failure_rate": 1.0, "failure_types": ["500"], "expires_at": None}
+    assert body == {
+        "enabled": True,
+        "failure_rate": 1.0,
+        "failure_types": ["500"],
+        "expires_at": None,
+        "ramp_ceiling_seconds": 3.0,
+        "ramp_window_seconds": 300.0,
+        "lag_increment_ms": 200.0,
+        "lag_ceiling_ms": 5000.0,
+        "kafka_delay_seconds": 3.0,
+    }
+
+
+def test_post_accepts_and_echoes_fase_2b_type_specific_params(monkeypatch):
+    monkeypatch.setenv(TOKEN_ENV_VAR, "s3cret")
+    client = TestClient(_build_app())
+
+    response = client.post(
+        "/internal/chaos/config",
+        json={
+            "enabled": True,
+            "failure_types": ["degradacao_progressiva", "kafka_lag", "kafka_delay"],
+            "ramp_ceiling_seconds": 5.0,
+            "ramp_window_seconds": 120.0,
+            "lag_increment_ms": 50.0,
+            "lag_ceiling_ms": 1000.0,
+            "kafka_delay_seconds": 1.0,
+        },
+        headers={TOKEN_HEADER: "s3cret"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ramp_ceiling_seconds"] == 5.0
+    assert body["ramp_window_seconds"] == 120.0
+    assert body["lag_increment_ms"] == 50.0
+    assert body["lag_ceiling_ms"] == 1000.0
+    assert body["kafka_delay_seconds"] == 1.0
+
+    from chaos.runtime_config import get_active_type_params
+
+    params = get_active_type_params()
+    assert params.ramp_ceiling_seconds == 5.0
+    assert params.lag_increment_ms == 50.0
 
 
 def test_post_with_unknown_failure_type_is_rejected_with_validation_error(monkeypatch):

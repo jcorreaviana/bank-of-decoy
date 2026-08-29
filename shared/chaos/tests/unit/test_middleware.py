@@ -9,7 +9,7 @@ from starlette.testclient import TestClient
 
 from chaos import ChaosInjectedError, ChaosMiddleware
 from chaos import middleware as chaos_middleware
-from chaos.runtime_config import clear_runtime_override
+from chaos.runtime_config import ChaosTypeParams, clear_runtime_override, set_runtime_override
 
 
 async def _ok_endpoint(request):
@@ -294,3 +294,80 @@ def test_load_config_prefers_runtime_override_over_env(monkeypatch):
     enabled, failure_rate, failure_types = chaos_middleware._load_config()
 
     assert (enabled, failure_rate, failure_types) == (True, 0.9, ["500"])
+
+
+def test_degradacao_progressiva_delay_grows_with_elapsed_time(monkeypatch):
+    """Nucleo do criterio de aceite: diferente de `latencia` (constante),
+    o delay de degradacao_progressiva cresce conforme o tempo passa desde
+    a ativacao - rampa de 0 ate ramp_ceiling_seconds ao longo de
+    ramp_window_seconds."""
+    monkeypatch.setattr(chaos_middleware.time, "monotonic", lambda: 1000.0)
+    set_runtime_override(
+        enabled=True,
+        failure_rate=1.0,
+        failure_types=["degradacao_progressiva"],
+        duration_seconds=None,
+        params=ChaosTypeParams(ramp_ceiling_seconds=10.0, ramp_window_seconds=100.0),
+    )
+
+    monkeypatch.setattr(chaos_middleware.time, "monotonic", lambda: 1000.0)
+    assert chaos_middleware._degradacao_progressiva_delay_seconds() == 0.0
+
+    monkeypatch.setattr(chaos_middleware.time, "monotonic", lambda: 1050.0)
+    assert chaos_middleware._degradacao_progressiva_delay_seconds() == 5.0
+
+    monkeypatch.setattr(chaos_middleware.time, "monotonic", lambda: 1100.0)
+    assert chaos_middleware._degradacao_progressiva_delay_seconds() == 10.0
+
+    # Depois da janela, fica no teto - nao ultrapassa nem volta a subir.
+    monkeypatch.setattr(chaos_middleware.time, "monotonic", lambda: 5000.0)
+    assert chaos_middleware._degradacao_progressiva_delay_seconds() == 10.0
+
+
+def test_degradacao_progressiva_injection_delays_then_returns_real_response(monkeypatch):
+    monkeypatch.setattr(chaos_middleware.random, "random", lambda: 0.0)
+    monkeypatch.setattr(chaos_middleware.random, "choice", lambda choices: "degradacao_progressiva")
+    monkeypatch.setattr(chaos_middleware.time, "monotonic", lambda: 1000.0)
+    set_runtime_override(
+        enabled=True,
+        failure_rate=1.0,
+        failure_types=["degradacao_progressiva"],
+        duration_seconds=None,
+        params=ChaosTypeParams(ramp_ceiling_seconds=3.0, ramp_window_seconds=60.0),
+    )
+    monkeypatch.setattr(chaos_middleware.time, "monotonic", lambda: 1030.0)
+    sleep_calls = []
+
+    async def _tracked_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(chaos_middleware.asyncio, "sleep", _tracked_sleep)
+    client = TestClient(_build_app())
+
+    response = client.get("/v1/widgets")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert sleep_calls == [1.5]
+
+
+@pytest.mark.parametrize("failure_type", ["kafka_lag", "kafka_delay"])
+def test_kafka_only_types_are_a_noop_for_http_requests(monkeypatch, failure_type, caplog):
+    """kafka_lag/kafka_delay sao consultados direto pelo producer/consumer
+    (chaos/kafka_chaos.py), nunca escolhidos de verdade para uma
+    requisicao HTTP - mas se o sorteio cair num deles aqui (porque estao
+    na mesma lista compartilhada de failure_types), a requisicao precisa
+    passar batido, nunca virar um 500 generico por engano, e sem logar
+    "chaos injetado" - nada foi de fato injetado nesta requisicao."""
+    monkeypatch.setenv("CHAOS_ENABLED", "true")
+    monkeypatch.setenv("CHAOS_FAILURE_RATE", "1.0")
+    monkeypatch.setattr(chaos_middleware.random, "random", lambda: 0.0)
+    monkeypatch.setattr(chaos_middleware.random, "choice", lambda choices: failure_type)
+    client = TestClient(_build_app())
+
+    with caplog.at_level(logging.WARNING, logger="chaos"):
+        response = client.get("/v1/widgets")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert [r for r in caplog.records if r.name == "chaos"] == []

@@ -10,7 +10,9 @@ request/commit que gerou o evento, nao silenciosamente mais tarde.
 
 import json
 import logging
+import time
 
+from chaos import maybe_kafka_publish_delay_seconds
 from confluent_kafka import KafkaException, Producer
 
 from app.core.config import get_settings
@@ -41,7 +43,15 @@ def _delivery_callback(err, msg) -> None:
 def publish_event(topic: str, envelope: dict, key: str | None = None) -> None:
     """Publica `envelope` (ja serializavel) em `topic`. Bloqueia ate o
     delivery report chegar (ou `_FLUSH_TIMEOUT_SECONDS` esgotar) - falha ou
-    timeout ficam visiveis via log ERROR, nunca descartados em silencio."""
+    timeout ficam visiveis via log ERROR, nunca descartados em silencio.
+
+    Chaos `kafka_delay` (issue #52, specs/business/24-camada-caos-avancada.md):
+    atraso fixo aplicado aqui, antes do produce - simula latencia da
+    infraestrutura de mensageria, nao do servico em si."""
+    delay = maybe_kafka_publish_delay_seconds()
+    if delay:
+        time.sleep(delay)
+
     producer = get_producer()
     try:
         producer.produce(

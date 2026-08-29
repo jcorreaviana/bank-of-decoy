@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chaos"
 version = "0.1.0"
-description = "Middleware de injecao de falhas simuladas (timeout, 503, 500, latencia) e endpoint interno de ajuste em runtime (POST /internal/chaos/config, issue #51) - camada de caos das Fases 2/2b (specs/business/11-camada-caos.md, specs/business/24-camada-caos-avancada.md), compartilhada entre onboarding-service, account-service, pix-key-service e transaction-service."
+description = "Middleware de injecao de falhas simuladas (timeout, 503, 500, latencia, kafka_lag, kafka_delay, degradacao_progressiva, payload_corrompido_sutil) e endpoint interno de ajuste em runtime (POST /internal/chaos/config, issues #51/#52) - camada de caos das Fases 2/2b (specs/business/11-camada-caos.md, specs/business/24-camada-caos-avancada.md), compartilhada entre onboarding-service, account-service, pix-key-service e transaction-service."
 requires-python = ">=3.12"
 dependencies = ["starlette", "fastapi", "pydantic"]
 
