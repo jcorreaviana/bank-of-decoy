@@ -5,6 +5,15 @@ em runtime, sem restart do processo. Reaproveita a logica de injecao ja
 existente em chaos/middleware.py: so troca a fonte de configuracao lida
 em `_load_config()` (env var -> override em chaos/runtime_config.py).
 
+`GET /internal/chaos/status` (issue #57) e o par de leitura: retorna o
+estado EFETIVO (override de runtime se houver, senao o fallback via
+variavel de ambiente), a mesma fonte que o ChaosMiddleware usa de verdade
+(chaos.runtime_config.get_effective_config) - existe porque
+agent-preditivo.chaos_status.is_chaos_enabled() so verificava a variavel
+de ambiente via `docker inspect`, nunca o override de runtime, entao caos
+ativado exclusivamente via POST (como o chaos-orchestrator da issue #53
+faz) nunca era detectado como ativo.
+
 Protegido por segredo compartilhado (chaos/internal_auth.py) em vez de
 depender de isolamento de rede - ver docstring daquele modulo.
 
@@ -22,7 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from chaos.internal_auth import is_internal_request_authorized
 from chaos.known_types import KNOWN_FAILURE_TYPES
-from chaos.runtime_config import ChaosRuntimeOverride, ChaosTypeParams, set_runtime_override
+from chaos.runtime_config import ChaosRuntimeOverride, ChaosTypeParams, get_effective_config, set_runtime_override
 
 router = APIRouter()
 
@@ -81,6 +90,20 @@ class ChaosConfigResponse(BaseModel):
     kafka_delay_seconds: float
 
 
+class ChaosStatusResponse(BaseModel):
+    """Resposta de GET /internal/chaos/status (issue #57) - estado
+    EFETIVO (override de runtime da issue #51 se houver, senao a config
+    inicial/fallback via variavel de ambiente), a mesma fonte usada pelo
+    ChaosMiddleware para decidir se injeta falha de verdade. Existe para
+    o agent-preditivo (chaos_status.py) poder perguntar "caos esta ativo
+    agora?" sem depender de `docker inspect` na variavel de ambiente, que
+    nunca refletia o override de runtime."""
+
+    enabled: bool
+    failure_rate: float
+    failure_types: list[str]
+
+
 @router.post(
     "/internal/chaos/config",
     response_model=ChaosConfigResponse,
@@ -113,6 +136,16 @@ def post_chaos_config(payload: ChaosConfigRequest) -> ChaosConfigResponse:
         lag_ceiling_ms=override.params.lag_ceiling_ms,
         kafka_delay_seconds=override.params.kafka_delay_seconds,
     )
+
+
+@router.get(
+    "/internal/chaos/status",
+    response_model=ChaosStatusResponse,
+    dependencies=[Depends(require_internal_token)],
+)
+def get_chaos_status() -> ChaosStatusResponse:
+    enabled, failure_rate, failure_types = get_effective_config()
+    return ChaosStatusResponse(enabled=enabled, failure_rate=failure_rate, failure_types=failure_types)
 
 
 def register_chaos_router(app: FastAPI) -> None:

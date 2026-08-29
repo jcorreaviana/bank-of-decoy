@@ -85,7 +85,9 @@ def check_log_repetido(service: str, entries: list[LogEntry]) -> BugSignal | Non
     return None
 
 
-def detect_bugs_for_service(service: str, prometheus_url: str | None = None) -> list[BugSignal]:
+def detect_bugs_for_service(
+    service: str, prometheus_url: str | None = None, base_url: str | None = None
+) -> list[BugSignal]:
     signals = fetch_golden_signals(service, prometheus_url=prometheus_url)
     entries = fetch_logs(service, since="5m")
     logger.info(
@@ -108,7 +110,7 @@ def detect_bugs_for_service(service: str, prometheus_url: str | None = None) -> 
         check_saturacao_pool(signals),
         check_log_repetido(service, entries),
     ]
-    chaos_ativo = is_chaos_enabled(service)
+    chaos_ativo = is_chaos_enabled(service, base_url)
     result = [replace(signal, chaos_ativo=chaos_ativo) for signal in found if signal is not None]
 
     if result:

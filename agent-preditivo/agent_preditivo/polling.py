@@ -26,7 +26,8 @@ def run_bug_cycle() -> list[int]:
     logger.info("Ciclo de detecção de bug iniciado.", extra={"context": {"services": settings.services}})
     issue_numbers = []
     for service in settings.services:
-        for signal in detect_bugs_for_service(service):
+        base_url = settings.api_base_urls.get(service)
+        for signal in detect_bugs_for_service(service, base_url=base_url):
             issue_number = register_bug(signal)
             if issue_number is not None:
                 issue_numbers.append(issue_number)

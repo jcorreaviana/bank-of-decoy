@@ -68,6 +68,13 @@ curl -X POST http://localhost:8002/internal/chaos/config \
   -d '{"enabled": true, "failure_rate": 1.0, "failure_types": ["503"], "duration_seconds": 300}'
 ```
 
+`GET /internal/chaos/status` (issue #57) é o par de leitura, mesma proteção — retorna o estado **efetivo** do serviço (override em runtime se houver, senão o fallback via variável de ambiente). Existe porque `agent-preditivo` precisava de um jeito confiável de perguntar "o caos está ativo agora?" que refletisse ativações feitas só via `POST` (como o `chaos-orchestrator` faz) — antes disso, `chaos_status.is_chaos_enabled()` só enxergava a variável de ambiente estática via `docker inspect`, nunca o override em runtime, e issues de bug abertas durante uma ativação via `POST` ficavam sem a label `chaos-test`.
+
+```bash
+curl http://localhost:8002/internal/chaos/status -H "X-Internal-Token: $CHAOS_INTERNAL_TOKEN"
+# {"enabled":true,"failure_rate":1.0,"failure_types":["503"]}
+```
+
 ### Novos tipos de falha (issue #52)
 
 Além de `timeout`/`503`/`500`/`latencia` (constantes), a Fase 2b adiciona 4 tipos com parâmetros próprios, ajustáveis no mesmo `POST /internal/chaos/config`:

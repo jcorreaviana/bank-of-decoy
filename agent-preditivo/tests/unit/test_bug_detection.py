@@ -105,6 +105,22 @@ def test_detect_bugs_for_service_marca_chaos_ativo_em_todos_os_sinais() -> None:
     assert signals[0].chaos_ativo is True
 
 
+def test_detect_bugs_for_service_repassa_base_url_para_is_chaos_enabled() -> None:
+    """issue #57: base_url precisa chegar ate is_chaos_enabled() para o
+    GET /internal/chaos/status ter como consultar o servico certo."""
+    with (
+        patch(
+            "agent_preditivo.bug_detection.fetch_golden_signals",
+            return_value=_signals(taxa_erro=LIMIAR_TAXA_ERRO + 0.1),
+        ),
+        patch("agent_preditivo.bug_detection.fetch_logs", return_value=[]),
+        patch("agent_preditivo.bug_detection.is_chaos_enabled", return_value=True) as mock_is_chaos_enabled,
+    ):
+        detect_bugs_for_service("transaction-service", base_url="http://localhost:8004")
+
+    mock_is_chaos_enabled.assert_called_once_with("transaction-service", "http://localhost:8004")
+
+
 def test_detect_bugs_for_service_chaos_desligado_nao_marca() -> None:
     with (
         patch(

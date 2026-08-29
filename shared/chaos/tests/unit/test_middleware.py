@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 
 from chaos import ChaosInjectedError, ChaosMiddleware
 from chaos import middleware as chaos_middleware
+from chaos.known_types import KNOWN_FAILURE_TYPES
 from chaos.runtime_config import ChaosTypeParams, clear_runtime_override, set_runtime_override
 
 
@@ -257,7 +258,7 @@ def test_load_config_defaults_when_unset():
 
     assert enabled is False
     assert failure_rate == 0.05
-    assert set(failure_types) == chaos_middleware._KNOWN_FAILURE_TYPES
+    assert set(failure_types) == KNOWN_FAILURE_TYPES
 
 
 def test_load_config_falls_back_on_invalid_rate(monkeypatch):
@@ -273,7 +274,7 @@ def test_load_config_filters_unknown_types_and_falls_back_when_empty(monkeypatch
 
     _, _, failure_types = chaos_middleware._load_config()
 
-    assert set(failure_types) == chaos_middleware._KNOWN_FAILURE_TYPES
+    assert set(failure_types) == KNOWN_FAILURE_TYPES
 
 
 def test_load_config_keeps_only_known_types(monkeypatch):

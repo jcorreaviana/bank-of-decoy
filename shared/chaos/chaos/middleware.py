@@ -25,7 +25,6 @@ nunca mostraria efeito nenhum ao ligar o caos).
 
 import asyncio
 import logging
-import os
 import random
 import time
 import uuid
@@ -35,9 +34,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Match
 
-from chaos.known_types import KNOWN_FAILURE_TYPES as _KNOWN_FAILURE_TYPES
 from chaos.payload_corruption import maybe_corrupt_response
-from chaos.runtime_config import get_activation_time, get_active_type_params, get_runtime_override
+from chaos.runtime_config import get_activation_time, get_active_type_params, get_effective_config
 
 logger = logging.getLogger("chaos")
 
@@ -47,7 +45,10 @@ logger = logging.getLogger("chaos")
 # cego (specs/business/11-camada-caos.md exige efeito visivel no Grafana).
 # /internal/chaos/config tambem fica de fora: senao o proprio endpoint
 # usado para desligar/ajustar o caos poderia ser vitima dele (issue #51).
-_EXEMPT_PATHS = {"/health", "/metrics", "/internal/chaos/config"}
+# /internal/chaos/status (issue #57) pelo mesmo motivo: precisa responder
+# de forma confiavel mesmo com o caos ativo - e exatamente quando o
+# agent-preditivo mais precisa perguntar "esta ativo?".
+_EXEMPT_PATHS = {"/health", "/metrics", "/internal/chaos/config", "/internal/chaos/status"}
 
 # Duracoes fixas, nao expostas como variavel de ambiente adicional - a
 # spec de negocio define apenas os 3 env vars acima como superficie de
@@ -118,23 +119,11 @@ def _degradacao_progressiva_delay_seconds() -> float:
 
 
 def _load_config() -> tuple[bool, float, list[str]]:
-    override = get_runtime_override()
-    if override is not None:
-        return override.enabled, override.failure_rate, override.failure_types
-
-    enabled = os.environ.get("CHAOS_ENABLED", "false").strip().lower() == "true"
-
-    try:
-        failure_rate = float(os.environ.get("CHAOS_FAILURE_RATE", "0.05"))
-    except ValueError:
-        failure_rate = 0.05
-
-    raw_types = os.environ.get("CHAOS_FAILURE_TYPES", "")
-    failure_types = [t.strip() for t in raw_types.split(",") if t.strip() in _KNOWN_FAILURE_TYPES]
-    if not failure_types:
-        failure_types = list(_KNOWN_FAILURE_TYPES)
-
-    return enabled, failure_rate, failure_types
+    # Wrapper fino sobre chaos.runtime_config.get_effective_config() -
+    # extraida de la (issue #57) para GET /internal/chaos/status
+    # (chaos/router.py) usar exatamente a mesma logica, sem risco de
+    # divergir do que este middleware realmente injeta.
+    return get_effective_config()
 
 
 class ChaosMiddleware(BaseHTTPMiddleware):

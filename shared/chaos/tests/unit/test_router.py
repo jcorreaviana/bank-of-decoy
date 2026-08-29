@@ -178,6 +178,91 @@ def test_env_var_fallback_still_works_when_endpoint_never_called(monkeypatch):
     assert response.json()["error_code"] == "CHAOS_SERVICE_UNAVAILABLE"
 
 
+def test_get_status_without_token_is_forbidden(monkeypatch):
+    monkeypatch.setenv(TOKEN_ENV_VAR, "s3cret")
+    client = TestClient(_build_app())
+
+    response = client.get("/internal/chaos/status")
+
+    assert response.status_code == 403
+    assert response.json()["error_code"] == "CHAOS_CONFIG_FORBIDDEN"
+
+
+def test_get_status_reflects_env_var_fallback_when_no_runtime_override(monkeypatch):
+    monkeypatch.setenv(TOKEN_ENV_VAR, "s3cret")
+    monkeypatch.setenv("CHAOS_ENABLED", "true")
+    monkeypatch.setenv("CHAOS_FAILURE_RATE", "0.5")
+    monkeypatch.setenv("CHAOS_FAILURE_TYPES", "503,500")
+    client = TestClient(_build_app())
+
+    response = client.get("/internal/chaos/status", headers={TOKEN_HEADER: "s3cret"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is True
+    assert body["failure_rate"] == 0.5
+    assert set(body["failure_types"]) == {"503", "500"}
+
+
+def test_get_status_disabled_by_default_when_nothing_configured(monkeypatch):
+    monkeypatch.setenv(TOKEN_ENV_VAR, "s3cret")
+    client = TestClient(_build_app())
+
+    response = client.get("/internal/chaos/status", headers={TOKEN_HEADER: "s3cret"})
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is False
+
+
+def test_get_status_reflects_runtime_override_even_without_env_var(monkeypatch):
+    # Nucleo do achado da issue #57: caos ativado SO via POST
+    # /internal/chaos/config (nunca a variavel de ambiente) - e exatamente
+    # como o chaos-orchestrator (issue #53) opera. GET /internal/chaos/status
+    # precisa refletir isso, diferente do antigo `docker inspect` na env var
+    # (agent-preditivo.chaos_status.is_chaos_enabled(), que nunca via isso).
+    monkeypatch.setenv(TOKEN_ENV_VAR, "s3cret")
+    monkeypatch.delenv("CHAOS_ENABLED", raising=False)
+    client = TestClient(_build_app())
+
+    before = client.get("/internal/chaos/status", headers={TOKEN_HEADER: "s3cret"})
+    assert before.json()["enabled"] is False
+
+    post_response = client.post(
+        "/internal/chaos/config",
+        json={"enabled": True, "failure_rate": 1.0, "failure_types": ["kafka_delay"]},
+        headers={TOKEN_HEADER: "s3cret"},
+    )
+    assert post_response.status_code == 200
+
+    after = client.get("/internal/chaos/status", headers={TOKEN_HEADER: "s3cret"})
+    assert after.status_code == 200
+    body = after.json()
+    assert body["enabled"] is True
+    assert body["failure_rate"] == 1.0
+    assert body["failure_types"] == ["kafka_delay"]
+
+
+def test_get_status_reverts_to_env_fallback_after_override_expires(monkeypatch):
+    monkeypatch.setenv(TOKEN_ENV_VAR, "s3cret")
+    monkeypatch.setenv("CHAOS_ENABLED", "false")
+    monkeypatch.setattr(runtime_config_module.time, "monotonic", lambda: 1000.0)
+    client = TestClient(_build_app())
+
+    client.post(
+        "/internal/chaos/config",
+        json={"enabled": True, "failure_rate": 1.0, "failure_types": ["503"], "duration_seconds": 30.0},
+        headers={TOKEN_HEADER: "s3cret"},
+    )
+
+    monkeypatch.setattr(runtime_config_module.time, "monotonic", lambda: 1010.0)
+    still_active = client.get("/internal/chaos/status", headers={TOKEN_HEADER: "s3cret"})
+    assert still_active.json()["enabled"] is True
+
+    monkeypatch.setattr(runtime_config_module.time, "monotonic", lambda: 1031.0)
+    expired = client.get("/internal/chaos/status", headers={TOKEN_HEADER: "s3cret"})
+    assert expired.json()["enabled"] is False
+
+
 def test_config_reverts_to_env_fallback_after_duration_expires(monkeypatch):
     monkeypatch.setenv(TOKEN_ENV_VAR, "s3cret")
     monkeypatch.setenv("CHAOS_ENABLED", "false")

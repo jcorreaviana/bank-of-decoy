@@ -19,9 +19,12 @@ com o usuario: cada chamada ao endpoint e um novo "experimento", nao
 uma continuacao do anterior.
 """
 
+import os
 import threading
 import time
 from dataclasses import dataclass, field
+
+from chaos.known_types import KNOWN_FAILURE_TYPES
 
 
 @dataclass(frozen=True)
@@ -179,3 +182,32 @@ def record_kafka_lag_message(increment_ms: float, ceiling_ms: float) -> float:
     contador (resetado a cada POST /internal/chaos/config) e retorna o
     atraso em ms para esta mensagem, capado em `ceiling_ms`."""
     return _store.next_kafka_lag_delay_ms(increment_ms, ceiling_ms)
+
+
+def get_effective_config() -> tuple[bool, float, list[str]]:
+    """Estado efetivo de ligado/taxa/tipos: override de runtime (issue #51)
+    tem prioridade total, senao cai nas variaveis de ambiente
+    (CHAOS_ENABLED/CHAOS_FAILURE_RATE/CHAOS_FAILURE_TYPES - config inicial/
+    fallback). Extraida de chaos/middleware.py (_load_config, ainda
+    presente la como wrapper fino) para virar fonte unica tambem para
+    GET /internal/chaos/status (chaos/router.py) - achado real (issue #57):
+    agent-preditivo.chaos_status.is_chaos_enabled() so verificava a
+    variavel de ambiente via `docker inspect`, nunca o override de runtime,
+    entao caos ativado so via POST nunca era detectado como ativo."""
+    override = get_runtime_override()
+    if override is not None:
+        return override.enabled, override.failure_rate, override.failure_types
+
+    enabled = os.environ.get("CHAOS_ENABLED", "false").strip().lower() == "true"
+
+    try:
+        failure_rate = float(os.environ.get("CHAOS_FAILURE_RATE", "0.05"))
+    except ValueError:
+        failure_rate = 0.05
+
+    raw_types = os.environ.get("CHAOS_FAILURE_TYPES", "")
+    failure_types = [t.strip() for t in raw_types.split(",") if t.strip() in KNOWN_FAILURE_TYPES]
+    if not failure_types:
+        failure_types = list(KNOWN_FAILURE_TYPES)
+
+    return enabled, failure_rate, failure_types
