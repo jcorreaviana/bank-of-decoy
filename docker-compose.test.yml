@@ -55,6 +55,7 @@ services:
       CHAOS_ENABLED: ${ONBOARDING_CHAOS_ENABLED:-false}
       CHAOS_FAILURE_RATE: ${ONBOARDING_CHAOS_FAILURE_RATE:-0.05}
       CHAOS_FAILURE_TYPES: ${ONBOARDING_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
+      CHAOS_INTERNAL_TOKEN: ${CHAOS_INTERNAL_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +80,7 @@ services:
       CHAOS_ENABLED: ${ACCOUNT_CHAOS_ENABLED:-false}
       CHAOS_FAILURE_RATE: ${ACCOUNT_CHAOS_FAILURE_RATE:-0.05}
       CHAOS_FAILURE_TYPES: ${ACCOUNT_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
+      CHAOS_INTERNAL_TOKEN: ${CHAOS_INTERNAL_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,6 +105,7 @@ services:
       CHAOS_ENABLED: ${PIX_KEY_CHAOS_ENABLED:-false}
       CHAOS_FAILURE_RATE: ${PIX_KEY_CHAOS_FAILURE_RATE:-0.05}
       CHAOS_FAILURE_TYPES: ${PIX_KEY_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
+      CHAOS_INTERNAL_TOKEN: ${CHAOS_INTERNAL_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy
@@ -128,6 +131,7 @@ services:
       CHAOS_ENABLED: ${TRANSACTION_CHAOS_ENABLED:-false}
       CHAOS_FAILURE_RATE: ${TRANSACTION_CHAOS_FAILURE_RATE:-0.05}
       CHAOS_FAILURE_TYPES: ${TRANSACTION_CHAOS_FAILURE_TYPES:-timeout,503,500,latencia}
+      CHAOS_INTERNAL_TOKEN: ${CHAOS_INTERNAL_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy

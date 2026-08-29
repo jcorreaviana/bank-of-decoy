@@ -52,3 +52,20 @@ Prefixos disponíveis: `ONBOARDING_CHAOS_*`, `ACCOUNT_CHAOS_*`, `PIX_KEY_CHAOS_*
 `/health` e `/metrics` nunca sofrem injeção (senão o healthcheck do compose e o scrape do Prometheus, usados para observar o efeito do caos, ficariam cegos junto).
 
 Logs de falha injetada carregam `context.chaos_injected: true` (ver [specs/tech/logging.md](specs/tech/logging.md)) — usado pelo agente preditivo (Fase 3) para não confundir caos com bug real.
+
+### Ajuste em runtime (Fase 2b)
+
+Desde a issue #51 ([specs/business/24-camada-caos-avancada.md](specs/business/24-camada-caos-avancada.md)), as 3 variáveis acima passam a ser só a config inicial/fallback: cada serviço expõe `POST /internal/chaos/config`, que ajusta tipo(s) de falha, taxa e uma duração/janela opcional **sem restart do processo** (estado em memória, por serviço, perdido ao reiniciar o container).
+
+Esse endpoint não é exposto publicamente — protegido por um segredo compartilhado (`CHAOS_INTERNAL_TOKEN`, igual nos 4 serviços, mesmo padrão de `CPF_ENCRYPTION_KEY`) enviado no header `X-Internal-Token`. Sem essa variável configurada, o endpoint fica inacessível (fail closed).
+
+```bash
+# liga caos so no account-service, 100% das requisicoes, so 503, por 5 minutos -
+# sem precisar de --force-recreate
+curl -X POST http://localhost:8002/internal/chaos/config \
+  -H "Content-Type: application/json" \
+  -H "X-Internal-Token: $CHAOS_INTERNAL_TOKEN" \
+  -d '{"enabled": true, "failure_rate": 1.0, "failure_types": ["503"], "duration_seconds": 300}'
+```
+
+Sem `duration_seconds`, o override vale até o próximo `POST` ou até o processo reiniciar (nesse caso as variáveis de ambiente voltam a valer como fallback).

@@ -1,4 +1,4 @@
-from chaos import ChaosMiddleware
+from chaos import ChaosMiddleware, register_chaos_router
 from fastapi import FastAPI
 
 from app.core.config import get_settings
@@ -18,6 +18,7 @@ app.add_middleware(ChaosMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(MetricsMiddleware)
 register_exception_handlers(app)
+register_chaos_router(app)
 register_db_pool_gauge(engine)
 app.include_router(health.router)
 app.include_router(metrics.router)

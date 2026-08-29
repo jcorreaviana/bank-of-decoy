@@ -8,6 +8,11 @@ de ambiente proprias (CHAOS_ENABLED, CHAOS_FAILURE_RATE,
 CHAOS_FAILURE_TYPES) - nao ha estado ou coordenacao compartilhada entre
 servicos.
 
+Desde a issue #51 (specs/business/24-camada-caos-avancada.md), essas
+variaveis de ambiente passam a ser apenas a config inicial/fallback:
+`POST /internal/chaos/config` (chaos/router.py) permite sobrepor os
+mesmos 3 parametros em runtime, sem restart - ver chaos/runtime_config.py.
+
 Ordem de registro: este middleware precisa ser adicionado ANTES de
 RequestLoggingMiddleware/MetricsMiddleware (ou seja, a primeira chamada
 `app.add_middleware(...)` de cada servico). O Starlette empacota middlewares
@@ -29,15 +34,18 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Match
 
-logger = logging.getLogger("chaos")
+from chaos.known_types import KNOWN_FAILURE_TYPES as _KNOWN_FAILURE_TYPES
+from chaos.runtime_config import get_runtime_override
 
-_KNOWN_FAILURE_TYPES = {"timeout", "503", "500", "latencia"}
+logger = logging.getLogger("chaos")
 
 # /health e /metrics ficam de fora do sorteio: se o caos derrubasse o
 # healthcheck do compose ou o endpoint que o Prometheus faz scrape, o
 # proprio mecanismo de observabilidade usado para VALIDAR o caos ficaria
 # cego (specs/business/11-camada-caos.md exige efeito visivel no Grafana).
-_EXEMPT_PATHS = {"/health", "/metrics"}
+# /internal/chaos/config tambem fica de fora: senao o proprio endpoint
+# usado para desligar/ajustar o caos poderia ser vitima dele (issue #51).
+_EXEMPT_PATHS = {"/health", "/metrics", "/internal/chaos/config"}
 
 # Duracoes fixas, nao expostas como variavel de ambiente adicional - a
 # spec de negocio define apenas os 3 env vars acima como superficie de
@@ -93,6 +101,10 @@ def _assign_route_template(request: Request) -> None:
 
 
 def _load_config() -> tuple[bool, float, list[str]]:
+    override = get_runtime_override()
+    if override is not None:
+        return override.enabled, override.failure_rate, override.failure_types
+
     enabled = os.environ.get("CHAOS_ENABLED", "false").strip().lower() == "true"
 
     try:

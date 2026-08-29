@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 
 from chaos import ChaosInjectedError, ChaosMiddleware
 from chaos import middleware as chaos_middleware
+from chaos.runtime_config import clear_runtime_override
 
 
 async def _ok_endpoint(request):
@@ -72,6 +73,9 @@ def _build_app_with_route_capture(captured: list) -> Starlette:
 def _clean_chaos_env(monkeypatch):
     for key in ("CHAOS_ENABLED", "CHAOS_FAILURE_RATE", "CHAOS_FAILURE_TYPES"):
         monkeypatch.delenv(key, raising=False)
+    # Isola de overrides de runtime (chaos/runtime_config.py, issue #51)
+    # deixados por outro teste - o store e um singleton por processo.
+    clear_runtime_override()
 
 
 def test_disabled_by_default_passes_through(monkeypatch):
@@ -278,3 +282,15 @@ def test_load_config_keeps_only_known_types(monkeypatch):
     _, _, failure_types = chaos_middleware._load_config()
 
     assert set(failure_types) == {"503", "500"}
+
+
+def test_load_config_prefers_runtime_override_over_env(monkeypatch):
+    monkeypatch.setenv("CHAOS_ENABLED", "false")
+    monkeypatch.setenv("CHAOS_FAILURE_RATE", "0.05")
+    from chaos.runtime_config import set_runtime_override
+
+    set_runtime_override(enabled=True, failure_rate=0.9, failure_types=["500"], duration_seconds=None)
+
+    enabled, failure_rate, failure_types = chaos_middleware._load_config()
+
+    assert (enabled, failure_rate, failure_types) == (True, 0.9, ["500"])
