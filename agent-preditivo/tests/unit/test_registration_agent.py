@@ -78,6 +78,218 @@ def test_format_bug_issue_usa_detail_como_fallback_se_llm_nao_seguir_formato() -
     assert "saturacao 90%" in body
 
 
+def test_format_bug_issue_prompt_usa_texto_guia_lido_do_template_real() -> None:
+    """Issue #45: o prompt enviado ao LLM precisa vir do texto-guia lido de
+    bug-report.md, nao de uma string fixa duplicada no Python."""
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x")
+    capturado = {}
+
+    def fake_chat(system_prompt: str, user_message: str) -> str:
+        capturado["system_prompt"] = system_prompt
+        return "SINAL_QUE_DISPAROU: x\nEVIDENCIA: y"
+
+    with patch("agent_preditivo.registration_agent.chat", side_effect=fake_chat):
+        format_bug_issue(signal)
+
+    # frase que só existe no texto-guia real de bug-report.md, sob "Sinal que disparou"
+    assert "taxa de erro > 5% em 5 min" in capturado["system_prompt"]
+    # frase que só existe no texto-guia real, sob "Evidência"
+    assert "Trecho relevante de log estruturado ou métrica" in capturado["system_prompt"]
+
+
+def test_format_bug_issue_secao_nova_no_template_aparece_no_corpo_sem_mudanca_de_codigo(
+    tmp_path, monkeypatch
+) -> None:
+    """Issue #45: adicionar uma secao nova ao template (sem tocar no codigo)
+    precisa refletir no corpo da issue gerada."""
+    template_path = tmp_path / "bug-report.md"
+    template_path.write_text(
+        """---
+name: Bug (detectado pelo agente preditivo)
+---
+
+## Sinal que disparou
+
+Qual threshold foi violado.
+
+## Serviço afetado
+
+Nome do serviço e criticidade.
+
+## Impacto no cliente
+
+Descreva o impacto percebido pelo usuário final.
+
+## Evidência
+
+Trecho relevante de log ou métrica.
+
+## Passos de reprodução (se aplicável)
+
+Sequência de ações, se identificável.
+
+## Sinal de risco (para o score de subida)
+
+Categoria da mudança: operacional (a maioria dos bugs técnicos se enquadra aqui)
+Serviço(s) afetado(s) e criticidade: preencher conforme acima
+
+## Dependências
+
+Issues relacionadas, se houver.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agent_preditivo.registration_agent.BUG_TEMPLATE_PATH", template_path)
+
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x")
+    capturado = {}
+
+    def fake_chat(system_prompt: str, user_message: str) -> str:
+        capturado["system_prompt"] = system_prompt
+        return (
+            "SINAL_QUE_DISPAROU: taxa elevada\n"
+            "IMPACTO_NO_CLIENTE: cliente não conseguiu completar o saque\n"
+            "EVIDENCIA: log de erro"
+        )
+
+    with patch("agent_preditivo.registration_agent.chat", side_effect=fake_chat):
+        _, body = format_bug_issue(signal)
+
+    # o prompt pediu o campo novo usando o texto-guia da secao nova do template
+    assert "IMPACTO_NO_CLIENTE" in capturado["system_prompt"]
+    assert "Descreva o impacto percebido pelo usuário final." in capturado["system_prompt"]
+    # o corpo final reflete a secao nova, na posição em que ela aparece no template
+    assert "## Impacto no cliente" in body
+    assert "cliente não conseguiu completar o saque" in body
+
+
+def test_format_bug_issue_secao_removida_do_template_nao_aparece_no_corpo(tmp_path, monkeypatch) -> None:
+    """Issue #45: remover uma secao do template (sem tocar no codigo)
+    precisa fazer essa secao sumir do corpo da issue gerada."""
+    template_path = tmp_path / "bug-report.md"
+    template_path.write_text(
+        """---
+name: Bug (detectado pelo agente preditivo)
+---
+
+## Sinal que disparou
+
+Qual threshold foi violado.
+
+## Evidência
+
+Trecho relevante de log ou métrica.
+
+## Sinal de risco (para o score de subida)
+
+Categoria da mudança: operacional (a maioria dos bugs técnicos se enquadra aqui)
+Serviço(s) afetado(s) e criticidade: preencher conforme acima
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agent_preditivo.registration_agent.BUG_TEMPLATE_PATH", template_path)
+
+    signal = BugSignal(service="transaction-service", signal_type="erro_alto", detail="x")
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value="SINAL_QUE_DISPAROU: x\nEVIDENCIA: y",
+    ):
+        _, body = format_bug_issue(signal)
+
+    assert "## Dependências" not in body
+    assert "## Passos de reprodução" not in body
+
+
+def test_format_opportunity_issue_prompt_usa_texto_guia_lido_do_template_real(specs_dir) -> None:
+    """Issue #45: o prompt enviado ao LLM (incluindo a lista de specs
+    tecnicas validas) precisa vir do texto-guia lido de business-story.md."""
+    finding = OpportunityFinding(
+        scenario_name="cenario_x", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+    capturado = {}
+
+    def fake_chat(system_prompt: str, user_message: str) -> str:
+        capturado["system_prompt"] = system_prompt
+        return "RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: - item 1\n- item 2"
+
+    with patch("agent_preditivo.registration_agent.chat", side_effect=fake_chat):
+        format_opportunity_issue(finding, scenario_path=None)
+
+    # lista de specs tecnicas veio da leitura do template, nao de constante fixa
+    assert "database.md" in capturado["system_prompt"]
+    assert "infrastructure.md" in capturado["system_prompt"]
+    # exemplo real do critério de aceite do template foi reaproveitado na instrução
+    assert "Testes cobrindo caminho feliz e erros documentados na spec" in capturado["system_prompt"]
+
+
+def test_format_opportunity_issue_nova_spec_tecnica_no_template_fica_disponivel_sem_mudanca_de_codigo(
+    tmp_path, monkeypatch, specs_dir
+) -> None:
+    """Issue #45: adicionar uma spec tecnica nova a lista do template precisa
+    deixá-la disponível para o LLM marcar e aparecer no corpo, sem editar
+    a lista fixa que hoje vive em Python."""
+    template_path = tmp_path / "business-story.md"
+    template_path.write_text(
+        """---
+name: História de negócio
+---
+
+## Spec de referência
+
+Link para a spec.
+
+## Resumo
+
+Resumo da história.
+
+## Contrato afetado
+
+Contrato afetado.
+
+## Critério de aceite
+
+- [ ] Item verificável 1
+
+## Specs técnicas relevantes
+
+- [ ] stack.md
+- [ ] resiliencia.md
+
+## Sinal de risco (para o score de subida)
+
+Categoria da mudança: regra de negócio | operacional
+Serviço(s) afetado(s) e criticidade: a definir
+
+## Dependências
+
+Nenhuma.
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("agent_preditivo.registration_agent.BUSINESS_STORY_TEMPLATE_PATH", template_path)
+
+    finding = OpportunityFinding(
+        scenario_name="cenario_x", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+    capturado = {}
+
+    def fake_chat(system_prompt: str, user_message: str) -> str:
+        capturado["system_prompt"] = system_prompt
+        return (
+            "RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: resiliencia.md\n"
+            "CRITERIO_ACEITE: - item 1\n- item 2"
+        )
+
+    with patch("agent_preditivo.registration_agent.chat", side_effect=fake_chat):
+        _, body, _ = format_opportunity_issue(finding, scenario_path=None)
+
+    assert "resiliencia.md" in capturado["system_prompt"]
+    assert "database.md" not in capturado["system_prompt"]  # não fazia parte deste template reduzido
+    assert "- [x] resiliencia.md" in body
+    assert "- [ ] stack.md" in body
+
+
 def test_format_opportunity_issue_preenche_campos_estruturados(specs_dir) -> None:
     finding = OpportunityFinding(
         scenario_name="cenario_x",
