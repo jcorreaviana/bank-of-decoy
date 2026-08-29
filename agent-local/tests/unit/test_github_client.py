@@ -1,4 +1,5 @@
 import json
+import subprocess
 from unittest.mock import MagicMock, patch
 
 from agent_local.github_client import (
@@ -73,6 +74,19 @@ def test_is_issue_open_true_quando_state_open() -> None:
 def test_is_issue_open_false_quando_state_closed() -> None:
     with patch("agent_local.github_client.subprocess.run", return_value=_mock_run('{"state": "CLOSED"}')):
         assert is_issue_open(1) is False
+
+
+def test_is_issue_open_false_quando_numero_nao_existe_no_github() -> None:
+    # Achado real na issue #50: secao "Dependencias" cita numeros de issue
+    # (#11, #9) que nao existem mais no GitHub. `gh issue view` retorna
+    # codigo de saida != 0 nesse caso - antes derrubava pick_candidate_issue
+    # (fora do try/except de process_issue), agora e tratado como
+    # "nao bloqueia" em vez de propagar a excecao.
+    error = subprocess.CalledProcessError(
+        returncode=1, cmd=["gh", "issue", "view", "11", "--json", "state"], stderr="GraphQL: Could not resolve to an issue"
+    )
+    with patch("agent_local.github_client.subprocess.run", side_effect=error):
+        assert is_issue_open(11) is False
 
 
 def test_create_pr_retorna_numero_e_url() -> None:

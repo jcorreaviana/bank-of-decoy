@@ -5,8 +5,11 @@ chamada de rede direta a API do GitHub - reusa a mesma autenticacao do
 (agent-preditivo/registration_agent.py)."""
 
 import json
+import logging
 import subprocess
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -71,7 +74,24 @@ def view_issue(number: int) -> Issue:
 
 
 def is_issue_open(number: int) -> bool:
-    raw = _run(["issue", "view", str(number), "--json", "state"])
+    """Numero referenciado em texto livre (secao 'Dependencias' de uma
+    issue) pode nao corresponder a nenhuma issue real no GitHub (achado
+    real na issue #50: cita '#11'/'#9' como contexto historico ja
+    concluido, numeros que nao existem mais como issues) - `gh issue view`
+    falha nesse caso. Tratado como "nao aberta" (nao bloqueia
+    has_open_dependency) em vez de propagar a excecao: esta funcao e
+    chamada por pick_candidate_issue(), fora do try/except de
+    process_issue() (specs/tech/error-handling.md), entao uma excecao aqui
+    derrubaria o loop inteiro do agente, nao so o processamento de uma
+    issue."""
+    try:
+        raw = _run(["issue", "view", str(number), "--json", "state"])
+    except subprocess.CalledProcessError as exc:
+        logger.warning(
+            "Nao foi possivel consultar issue referenciada em dependencias - tratando como nao bloqueante.",
+            extra={"context": {"issue_number": number, "stderr": exc.stderr}},
+        )
+        return False
     return json.loads(raw)["state"] == "OPEN"
 
 
