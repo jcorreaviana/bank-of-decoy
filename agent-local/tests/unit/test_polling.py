@@ -6,11 +6,14 @@ import pytest
 from agent_local.github_client import Issue
 from agent_local.polling import (
     AGENT_STUCK_LABEL,
+    NO_ACTION_DECISION,
     _current_retry_count,
     pick_candidate_issue,
     process_issue,
     run_cycle,
 )
+from agent_local.risk_score import RiskFields, RiskScoreResult
+from agent_local.sdk_invocation import SDKInvocationResult
 
 
 def _issue(number: int = 42, labels: list[str] | None = None) -> Issue:
@@ -174,6 +177,170 @@ def _settings(max_consecutive_failures: int = 3) -> MagicMock:
     settings = MagicMock()
     settings.max_consecutive_failures = max_consecutive_failures
     return settings
+
+
+def _full_settings() -> MagicMock:
+    """Settings completo, para testes que percorrem `process_issue` ate o
+    ponto de decisao de no-op (diff/coverage/risk), nao so ate a primeira
+    falha."""
+    settings = MagicMock()
+    settings.max_consecutive_failures = 3
+    settings.repo_url = "https://github.com/x/y"
+    settings.repo_clone_dir = "./workspace"
+    settings.model = "claude-sonnet-5"
+    settings.max_turns = 50
+    settings.sdk_timeout_seconds = 1800.0
+    settings.test_database_host = "localhost"
+    settings.test_database_port = "5433"
+    return settings
+
+
+def _risk(diff_lines: int) -> RiskScoreResult:
+    return RiskScoreResult(
+        score=78.0,
+        threshold=20.0,
+        decision="humano",
+        risk_fields=RiskFields(
+            category="regra_de_negocio", criticality="critico", category_parsed=False, criticality_parsed=False
+        ),
+        coverage_fraction=0.0,
+        diff_lines=diff_lines,
+    )
+
+
+def _sdk_result(success: bool, result_text: str = "") -> SDKInvocationResult:
+    return SDKInvocationResult(
+        success=success, result_text=result_text, total_cost_usd=0.05, session_id="session-1"
+    )
+
+
+def test_process_issue_diff_lines_zero_com_sdk_sucesso_gera_no_action_needed() -> None:
+    """Destino 2 (specs/tech/error-handling.md): SDK concluiu (result_text
+    presente) e nao gerou diff - decisao propria em risk_decisions, sem
+    push/PR, issue desatribuida com comentario especifico (nao o comentario
+    generico de falha do destino 3)."""
+    issue = _issue(number=41)
+    risk = _risk(diff_lines=0)
+    sdk_result = _sdk_result(success=True, result_text="A issue ja esta implementada, nenhuma mudanca necessaria.")
+
+    with (
+        patch("agent_local.polling.get_settings", return_value=_full_settings()),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", return_value="/tmp/repo"),
+        patch("agent_local.polling.git_ops.create_issue_branch", return_value="issue-41"),
+        patch("agent_local.polling.invoke_sdk", return_value=sdk_result),
+        patch("agent_local.polling.test_runner.get_diff_stat") as mock_diff_stat,
+        patch("agent_local.polling.test_runner.detect_affected_services", return_value=[]),
+        patch("agent_local.polling.calculate_risk_score", return_value=risk),
+        patch("agent_local.polling.agent_ops_db.record_risk_decision") as mock_record,
+        patch("agent_local.polling.github_client.comment_issue") as mock_comment,
+        patch("agent_local.polling.github_client.unassign_self") as mock_unassign,
+        patch("agent_local.polling.git_ops.push_branch") as mock_push,
+        patch("agent_local.polling.open_pull_request") as mock_open_pr,
+        patch("agent_local.polling.apply_gate") as mock_apply_gate,
+        patch("agent_local.polling.github_client.add_issue_label") as mock_add_label,
+    ):
+        mock_diff_stat.return_value = MagicMock(files_changed=[], lines_changed=0)
+
+        result = process_issue(issue)
+
+    assert result["decision"] == NO_ACTION_DECISION
+    assert result["pr_number"] is None
+
+    mock_record.assert_called_once()
+    assert mock_record.call_args.kwargs["decision"] == NO_ACTION_DECISION
+    assert mock_record.call_args.kwargs["pr_number"] is None
+    assert mock_record.call_args.kwargs["issue_number"] == 41
+
+    mock_comment.assert_called_once()
+    assert "nenhuma" in mock_comment.call_args.args[1].lower() or "Nenhuma" in mock_comment.call_args.args[1]
+    assert "A issue ja esta implementada" in mock_comment.call_args.args[1]
+    mock_unassign.assert_called_once_with(41)
+
+    mock_push.assert_not_called()
+    mock_open_pr.assert_not_called()
+    mock_apply_gate.assert_not_called()
+    mock_add_label.assert_not_called()  # nao pode cair no caminho de retry/falha generica
+
+
+def test_process_issue_diff_lines_zero_sem_sdk_success_cai_em_falha_generica() -> None:
+    """Se diff_lines==0 mas o SDK nao produziu result_text (`success=False`),
+    nao ha confirmacao de que o SDK de fato concluiu - nao pode ser tratado
+    como no-op legitimo, deve cair no destino 3 (falha generica) da #40:
+    desatribui, comenta o motivo da falha e marca retry."""
+    issue = _issue(number=41)
+    risk = _risk(diff_lines=0)
+    sdk_result = _sdk_result(success=False, result_text="")
+
+    with (
+        patch("agent_local.polling.get_settings", return_value=_full_settings()),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", return_value="/tmp/repo"),
+        patch("agent_local.polling.git_ops.create_issue_branch", return_value="issue-41"),
+        patch("agent_local.polling.invoke_sdk", return_value=sdk_result),
+        patch("agent_local.polling.test_runner.get_diff_stat") as mock_diff_stat,
+        patch("agent_local.polling.test_runner.detect_affected_services", return_value=[]),
+        patch("agent_local.polling.calculate_risk_score", return_value=risk),
+        patch("agent_local.polling.agent_ops_db.record_risk_decision") as mock_record,
+        patch("agent_local.polling.github_client.comment_issue") as mock_comment,
+        patch("agent_local.polling.github_client.unassign_self") as mock_unassign,
+        patch("agent_local.polling.git_ops.push_branch") as mock_push,
+        patch("agent_local.polling.open_pull_request") as mock_open_pr,
+        patch("agent_local.polling.apply_gate") as mock_apply_gate,
+        patch("agent_local.polling.github_client.add_issue_label") as mock_add_label,
+    ):
+        mock_diff_stat.return_value = MagicMock(files_changed=[], lines_changed=0)
+
+        with pytest.raises(RuntimeError, match="sdk_result.success"):
+            process_issue(issue)
+
+    mock_record.assert_not_called()
+    mock_push.assert_not_called()
+    mock_open_pr.assert_not_called()
+    mock_apply_gate.assert_not_called()
+
+    mock_add_label.assert_called_once_with(41, "agent-retry-1")
+    mock_comment.assert_called_once()
+    assert "sdk_result.success" in mock_comment.call_args.args[1]
+    mock_unassign.assert_called_once_with(41)
+
+
+def test_process_issue_diff_lines_positivo_segue_fluxo_normal_sem_no_action() -> None:
+    """Regressao: com diff_lines > 0, o fluxo normal (push/PR/gate) deve
+    continuar intacto - o caminho de no-op nao pode interceptar o caso
+    comum."""
+    issue = _issue(number=41)
+    risk = _risk(diff_lines=12)
+    sdk_result = _sdk_result(success=True, result_text="Implementado.")
+
+    with (
+        patch("agent_local.polling.get_settings", return_value=_full_settings()),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", return_value="/tmp/repo"),
+        patch("agent_local.polling.git_ops.create_issue_branch", return_value="issue-41"),
+        patch("agent_local.polling.invoke_sdk", return_value=sdk_result),
+        patch("agent_local.polling.test_runner.get_diff_stat") as mock_diff_stat,
+        patch("agent_local.polling.test_runner.detect_affected_services", return_value=[]),
+        patch("agent_local.polling.calculate_risk_score", return_value=risk),
+        patch("agent_local.polling.agent_ops_db.record_risk_decision") as mock_record,
+        patch("agent_local.polling.github_client.comment_issue") as mock_comment,
+        patch("agent_local.polling.github_client.unassign_self") as mock_unassign,
+        patch("agent_local.polling.git_ops.push_branch") as mock_push,
+        patch("agent_local.polling.open_pull_request", return_value=(7, "https://github.com/x/y/pull/7")) as mock_open_pr,
+        patch("agent_local.polling.apply_gate", return_value="humano") as mock_apply_gate,
+    ):
+        mock_diff_stat.return_value = MagicMock(files_changed=["a.py"], lines_changed=12)
+
+        result = process_issue(issue)
+
+    assert result["decision"] == "humano"
+    assert result["pr_number"] == 7
+    mock_push.assert_called_once()
+    mock_open_pr.assert_called_once()
+    mock_apply_gate.assert_called_once()
+    mock_record.assert_not_called()  # a auditoria no fluxo normal e responsabilidade do apply_gate, nao do polling
+    mock_comment.assert_not_called()
+    mock_unassign.assert_not_called()  # issue continua atribuida no fluxo normal (nao ha destino 2/3 aqui)
 
 
 def test_current_retry_count_le_label_de_retry() -> None:

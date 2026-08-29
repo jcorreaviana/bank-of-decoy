@@ -11,14 +11,14 @@ from pathlib import Path
 
 from notifications import notify_agent_error
 
-from agent_local import git_ops, github_client, test_runner
+from agent_local import agent_ops_db, git_ops, github_client, test_runner
 from agent_local.config import get_settings
 from agent_local.dependency_check import has_open_dependency
 from agent_local.gate import apply_gate, open_pull_request
 from agent_local.github_client import Issue
 from agent_local.logging_config import configure_logging, new_trace_id
-from agent_local.risk_score import calculate_risk_score
-from agent_local.sdk_invocation import build_task_prompt, invoke_sdk
+from agent_local.risk_score import RiskScoreResult, calculate_risk_score
+from agent_local.sdk_invocation import SDKInvocationResult, build_task_prompt, invoke_sdk
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,13 @@ fila, sem precisar alterar a query de busca nem duplicar essa regra em dois
 lugares."""
 
 _RETRY_LABEL_PATTERN = re.compile(r"^agent-retry-(\d+)$")
+
+NO_ACTION_DECISION = "no_action_needed"
+"""Destino 2 do ciclo de vida pos-`assign_self` (specs/tech/error-handling.md):
+o SDK concluiu a execucao (produziu `result_text`, ver `sdk_result.success`)
+e decidiu, corretamente, que nao ha mudanca de codigo a fazer (`diff_lines
+== 0`). Isso nao e falha - precisa de decisao propria em `risk_decisions`,
+distinta de "autonomo"/"humano" (que sempre tem PR associado)."""
 
 CHAOS_ORIGIN_LABEL = "chaos-test"
 """Issue de bug criada pelo agent-preditivo enquanto CHAOS_ENABLED estava
@@ -153,6 +160,49 @@ def _handle_process_issue_failure(issue: Issue, exc: Exception, max_consecutive_
     )
 
 
+def _handle_no_action_needed(issue: Issue, risk: RiskScoreResult, sdk_result: SDKInvocationResult) -> dict:
+    """Destino 2 (specs/tech/error-handling.md): `diff_lines == 0` com o SDK
+    tendo concluido normalmente (`sdk_result.success`, ver docstring de
+    `NO_ACTION_DECISION`). Nao passa por `push_branch`/`open_pull_request` -
+    registra a decisao, comenta o motivo e desatribui, sem PR."""
+    agent_ops_db.record_risk_decision(
+        issue_number=issue.number,
+        risk_score=risk.score,
+        threshold_used=risk.threshold,
+        service_criticality=risk.risk_fields.criticality,
+        decision=NO_ACTION_DECISION,
+        pr_number=None,
+    )
+
+    explicacao = sdk_result.result_text.strip() if sdk_result.result_text else "(SDK nao retornou explicacao adicional)"
+    github_client.comment_issue(
+        issue.number,
+        "Nenhuma mudança de código foi necessária para esta issue - "
+        f"o agente concluiu a análise sem gerar diff.\n\n{explicacao}",
+    )
+    github_client.unassign_self(issue.number)
+
+    logger.info(
+        "Issue concluida sem necessidade de mudanca de codigo (no-op legitimo).",
+        extra={
+            "context": {
+                "issue_number": issue.number,
+                "decision": NO_ACTION_DECISION,
+                "diff_lines": risk.diff_lines,
+            }
+        },
+    )
+
+    return {
+        "issue_number": issue.number,
+        "pr_number": None,
+        "score": risk.score,
+        "decision": NO_ACTION_DECISION,
+        "sdk_success": sdk_result.success,
+        "sdk_cost_usd": sdk_result.total_cost_usd,
+    }
+
+
 def process_issue(issue: Issue) -> dict:
     settings = get_settings()
 
@@ -204,6 +254,15 @@ def process_issue(issue: Issue) -> dict:
                 }
             },
         )
+
+        if risk.diff_lines == 0:
+            if not sdk_result.success:
+                raise RuntimeError(
+                    "diff_lines=0 mas o SDK nao produziu result_text (sdk_result.success=False) - "
+                    "nao ha confirmacao de que o SDK de fato concluiu a execucao, entao nao pode "
+                    "ser tratado como no-op legitimo (destino 2)."
+                )
+            return _handle_no_action_needed(issue, risk, sdk_result)
 
         git_ops.push_branch(repo_dir, branch)
         pr_number, pr_url = open_pull_request(issue.number, branch, repo_dir, title=f"{issue.title} (#{issue.number})")
