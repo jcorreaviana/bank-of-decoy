@@ -1,0 +1,39 @@
+# Cenario de cascata coordenada de exemplo (issue #53,
+# specs/business/24-camada-caos-avancada.md).
+#
+# account-service comeca a degradar progressivamente no minuto 2 (latencia
+# HTTP crescendo de 0 ate 3s ao longo de 4 minutos) - simula o servico ja
+# sob stress. No minuto 3, com a degradacao ainda em curso, o publish do
+# evento onboarding.aprovado no onboarding-service tambem passa a atrasar 4s
+# fixos - o pipeline assincrono que cria novas contas (onboarding -> Kafka ->
+# consumer do account-service) fica mais lento bem no momento em que
+# account-service ja esta respondendo devagar, compondo o efeito de uma
+# dependencia sob stress enquanto a fila tambem atrasa.
+#
+# kafka_lag (nao usado aqui) so tem efeito real no account-service (unico
+# consumer de onboarding.aprovado); kafka_delay so tem efeito real no
+# onboarding-service (unico producer) - por isso o par escolhido, em vez de
+# transaction-service (que nao participa do Kafka).
+name: account-and-queue-cascade
+description: >
+  account-service degrada progressivamente via HTTP a partir do minuto 2,
+  enquanto o publish do evento onboarding.aprovado atrasa a partir do
+  minuto 3 - simula uma dependencia sob stress com a fila tambem atrasando.
+
+timeline:
+  - service: account-service
+    failure_types: [degradacao_progressiva]
+    start_minute: 2
+    duration_minutes: 5
+    params:
+      failure_rate: 1.0
+      ramp_ceiling_seconds: 3.0
+      ramp_window_seconds: 240
+
+  - service: onboarding-service
+    failure_types: [kafka_delay]
+    start_minute: 3
+    duration_minutes: 4
+    params:
+      failure_rate: 1.0
+      kafka_delay_seconds: 4.0

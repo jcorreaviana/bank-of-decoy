@@ -86,3 +86,38 @@ curl -X POST http://localhost:8002/internal/chaos/config \
 ```
 
 Sem `duration_seconds`, o override vale até o próximo `POST` ou até o processo reiniciar (nesse caso as variáveis de ambiente voltam a valer como fallback).
+
+### Cascata coordenada (`chaos-orchestrator`, issue #53)
+
+`chaos-orchestrator/` é um runner Python standalone (fora dos 4 microserviços, sem framework web) que lê um cenário YAML descrevendo uma **timeline** de ativações de caos em múltiplos serviços e chama `POST /internal/chaos/config` de cada um no minuto certo — permite simular cascata (ex. um serviço degradando enquanto sua fila de mensagens também atrasa) sem coordenação manual.
+
+```bash
+cd chaos-orchestrator
+python -m venv .venv && .venv/Scripts/pip install -r requirements.txt   # (ou .venv/bin/pip fora do Windows)
+
+# contra o ambiente local (docker-compose up ou docker-compose.test.yml) já no ar
+CHAOS_INTERNAL_TOKEN=$CHAOS_INTERNAL_TOKEN .venv/Scripts/python orchestrator.py scenarios/account_and_queue_cascade.yaml
+```
+
+Formato do cenário (`scenarios/account_and_queue_cascade.yaml` é o exemplo de referência): `timeline` é uma lista de passos, cada um com `service`, `failure_types`, `start_minute`/`duration_minutes` (relativos ao início da execução do orquestrador) e `params` (os mesmos campos aceitos pelo payload da API — `failure_rate`, `ramp_ceiling_seconds`, `lag_increment_ms`, `kafka_delay_seconds` etc.).
+
+```yaml
+timeline:
+  - service: account-service
+    failure_types: [degradacao_progressiva]
+    start_minute: 2
+    duration_minutes: 5
+    params:
+      failure_rate: 1.0
+      ramp_ceiling_seconds: 3.0
+      ramp_window_seconds: 240
+```
+
+Comportamento:
+- Cada ativação já sai com um `duration_seconds` de segurança (janela prevista + margem) — mesmo que o orquestrador seja interrompido de forma abrupta (`SIGKILL`, queda de máquina), o serviço se auto-desliga sozinho depois de um tempo, sem depender do orquestrador terminar corretamente.
+- `Ctrl+C` (`SIGINT`/`SIGTERM`) interrompe a timeline o quanto antes e dispara desligamento explícito de tudo que estiver ativo naquele momento.
+- Falha de rede/timeout ao chamar um serviço específico é logada (nível `ERROR`) e não derruba o restante da timeline — o orquestrador segue tentando os próximos passos.
+- Duas ativações que se sobrepõem no **mesmo** serviço são fundidas numa única chamada (o endpoint substitui `failure_types` por completo a cada `POST` — duas chamadas independentes fariam a segunda apagar a primeira).
+- Todo log segue o formato de linha única JSON de [specs/tech/logging.md](specs/tech/logging.md), com `trace_id` único por execução do cenário — evidência para a janela de validação da issue #54 e para o artigo.
+
+Testes em `chaos-orchestrator/tests/` (`pytest`, sem precisar do ambiente Docker no ar — timeline exercitada com relógio falso, sem esperar minutos reais).
