@@ -39,6 +39,23 @@ SERVICE_CRITICALITY = {
     "onboarding-service": "alto",
 }
 
+_TECH_SPECS = [
+    "stack.md",
+    "logging.md",
+    "database.md",
+    "error-handling.md",
+    "api-conventions.md",
+    "testing.md",
+    "observability.md",
+    "messaging.md",
+    "security.md",
+    "infrastructure.md",
+]
+
+_GENERIC_CRITERIO_ITEM = "A definir após triagem humana/agente local"
+
+_BUSINESS_SPECS_DIR = _REPO_ROOT / "specs" / "business"
+
 _BUG_SYSTEM_PROMPT = """Voce e o agente de registro tecnico de um sistema de monitoramento \
 bancario. Escreva, em portugues, uma narrativa TECNICA curta e objetiva para uma issue de bug, \
 com base no sinal detectado que sera descrito pelo usuario. Responda em EXATAMENTE este formato, \
@@ -55,6 +72,12 @@ pelo usuario. Responda em EXATAMENTE este formato, nada antes nem depois:
 
 RESUMO: <uma ou duas frases resumindo a lacuna encontrada, em linguagem de negocio>
 CONTRATO_AFETADO: <qual contrato/regra de negocio o comportamento observado nao respeita>
+SPECS_TECNICAS: <lista separada por virgula, somente com nomes exatos dentre: stack.md, logging.md, \
+database.md, error-handling.md, api-conventions.md, testing.md, observability.md, messaging.md, \
+security.md, infrastructure.md - inclua so as realmente relevantes para esse achado especifico, \
+ou "nenhuma" se nenhuma se aplicar>
+CRITERIO_ACEITE: <entre 2 e 4 itens verificaveis reais derivados do achado, um por linha, cada \
+linha comecando com "- ", sem numeracao>
 """
 
 
@@ -64,6 +87,102 @@ def _parse_fields(raw: str, *field_names: str) -> dict[str, str]:
         match = re.search(rf"{name}:\s*(.+?)(?=\n[A-Z_]+:|$)", raw, re.DOTALL)
         fields[name] = match.group(1).strip() if match else ""
     return fields
+
+
+def _parse_specs_tecnicas(raw_field: str) -> list[str]:
+    if not raw_field:
+        return []
+    candidatos = {item.strip().lower() for item in raw_field.split(",")}
+    return [spec for spec in _TECH_SPECS if spec.lower() in candidatos]
+
+
+def _parse_criterio_items(raw_field: str) -> list[str]:
+    items = []
+    for line in raw_field.splitlines():
+        line = line.strip()
+        previous = None
+        while line != previous:
+            # o LLM as vezes empilha marcadores (ex. "- - item", "- [ ] item") -
+            # remove uma camada por iteracao ate estabilizar, nao so uma vez
+            # (achado real na validacao ponta a ponta da issue #44)
+            previous = line
+            line = re.sub(r"^-\s*", "", line)
+            line = re.sub(r"^\[[ xX]?\]\s*", "", line)
+            line = re.sub(r"^\d+[.)]\s*", "", line).strip()
+        if line:
+            items.append(line)
+    return items[:4]
+
+
+def _next_spec_number() -> int:
+    numbers = []
+    for path in _BUSINESS_SPECS_DIR.glob("*.md"):
+        match = re.match(r"(\d+)-", path.name)
+        if match:
+            numbers.append(int(match.group(1)))
+    return max(numbers, default=0) + 1
+
+
+def _spec_slug(scenario_name: str) -> str:
+    return scenario_name.replace("_", "-")
+
+
+def _write_business_spec(
+    finding: OpportunityFinding, resumo: str, contrato_afetado: str, criterio_items: list[str]
+) -> Path:
+    """Cria a spec de negocio de referencia da oportunidade em
+    specs/business/, seguindo a mesma estrutura das specs ja existentes
+    (issue #44) - o template business-story.md exige que a spec exista
+    antes do inicio da implementacao."""
+    _BUSINESS_SPECS_DIR.mkdir(parents=True, exist_ok=True)
+    number = _next_spec_number()
+    slug = _spec_slug(finding.scenario_name)
+    path = _BUSINESS_SPECS_DIR / f"{number}-{slug}.md"
+    titulo = finding.scenario_name.replace("_", " ").capitalize()
+    criterio = "\n".join(f"- [ ] {item}" for item in criterio_items)
+    content = f"""# {number} — {titulo}
+
+## Contexto
+
+{resumo}
+
+Comportamento observado: {finding.observed_behavior}
+
+## Objetivo
+
+{contrato_afetado}
+
+## Critério de aceite
+
+{criterio}
+
+## Sinal de risco
+
+Categoria da mudança: regra de negócio
+Serviço(s) afetado(s): a definir na triagem
+
+## Dependências
+
+Nenhuma.
+"""
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+def _commit_and_push_spec(spec_path: Path) -> None:
+    """Commita e empurra a spec de negocio recem-criada direto para
+    origin/main - o agent-local roda em um clone separado (v13/v14,
+    agent-local/agent_local/git_ops.py: `git pull --ff-only` de main antes
+    de criar branch), entao a spec precisa existir no remoto antes de a
+    issue ser aberta, nao so localmente (issue #44)."""
+    rel_path = spec_path.relative_to(_REPO_ROOT).as_posix()
+    subprocess.run(["git", "add", rel_path], cwd=_REPO_ROOT, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", f"docs(specs): adicionar {rel_path}"],
+        cwd=_REPO_ROOT,
+        check=True,
+    )
+    subprocess.run(["git", "push", "origin", "main"], cwd=_REPO_ROOT, check=True)
 
 
 def format_bug_issue(signal: BugSignal) -> tuple[str, str]:
@@ -112,32 +231,50 @@ Nenhuma.
     return title, body
 
 
-def format_opportunity_issue(finding: OpportunityFinding, scenario_path: Path | None) -> tuple[str, str]:
+def format_opportunity_issue(finding: OpportunityFinding, scenario_path: Path | None) -> tuple[str, str, Path]:
     BUSINESS_STORY_TEMPLATE_PATH.read_text(encoding="utf-8")
     raw = chat(
         _OPORTUNIDADE_SYSTEM_PROMPT,
         f"Cenário: {finding.scenario_name}. Comportamento observado: {finding.observed_behavior}. "
         f"Racional do agente: {finding.racional}",
     )
-    fields = _parse_fields(raw, "RESUMO", "CONTRATO_AFETADO")
+    fields = _parse_fields(raw, "RESUMO", "CONTRATO_AFETADO", "SPECS_TECNICAS", "CRITERIO_ACEITE")
+
+    resumo = fields["RESUMO"] or finding.racional
+    contrato_afetado = fields["CONTRATO_AFETADO"] or finding.observed_behavior
+
+    specs_relevantes = _parse_specs_tecnicas(fields["SPECS_TECNICAS"])
+    specs_checklist = "\n".join(f"- [{'x' if spec in specs_relevantes else ' '}] {spec}" for spec in _TECH_SPECS)
+
+    criterio_items = _parse_criterio_items(fields["CRITERIO_ACEITE"]) or [_GENERIC_CRITERIO_ITEM]
+    criterio_checklist = "\n".join(f"- [ ] {item}" for item in criterio_items)
+
+    spec_path = _write_business_spec(finding, resumo, contrato_afetado, criterio_items)
+    spec_ref = f"`{spec_path.relative_to(_REPO_ROOT).as_posix()}`"
+    scenario_ref = f"`{scenario_path.relative_to(_REPO_ROOT).as_posix()}`" if scenario_path else "(não salva)"
 
     title = f"[FASE 3] Oportunidade: {finding.scenario_name}"
-    scenario_ref = f"`{scenario_path.relative_to(_REPO_ROOT).as_posix()}`" if scenario_path else "(não salva)"
     body = f"""## Spec de referência
+
+{spec_ref}
 
 Cenário reproduzível: {scenario_ref}
 
 ## Resumo
 
-{fields['RESUMO'] or finding.racional}
+{resumo}
 
 ## Contrato afetado
 
-{fields['CONTRATO_AFETADO'] or finding.observed_behavior}
+{contrato_afetado}
 
 ## Critério de aceite
 
-- [ ] A definir após triagem humana/agente local
+{criterio_checklist}
+
+## Specs técnicas relevantes
+
+{specs_checklist}
 
 ## Sinal de risco (para o score de subida)
 
@@ -148,7 +285,7 @@ Serviço(s) afetado(s) e criticidade: a definir na triagem
 
 Nenhuma.
 """
-    return title, body
+    return title, body, spec_path
 
 
 def create_issue(title: str, body: str, label: str, extra_labels: list[str] | None = None) -> tuple[int, str]:
@@ -217,7 +354,8 @@ def register_opportunity(finding: OpportunityFinding, scenario_path: Path | None
         )
         return None
 
-    title, body = format_opportunity_issue(finding, scenario_path)
+    title, body, spec_path = format_opportunity_issue(finding, scenario_path)
+    _commit_and_push_spec(spec_path)
     issue_number, url = create_issue(title, body, "business-story")
     agent_ops_db.register_signal(finding.scenario_name, "oportunidade", issue_number=issue_number)
     notify_issue_created(issue_number, title, "business-story", url)

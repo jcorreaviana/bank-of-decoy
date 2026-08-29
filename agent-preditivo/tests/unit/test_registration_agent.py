@@ -1,5 +1,8 @@
 import logging
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from agent_preditivo.bug_detection import BugSignal
 from agent_preditivo.opportunity_detection import OpportunityFinding
@@ -9,6 +12,18 @@ from agent_preditivo.registration_agent import (
     register_bug,
     register_opportunity,
 )
+
+
+@pytest.fixture
+def specs_dir(tmp_path, monkeypatch):
+    """Isola o diretorio specs/business/ (e o _REPO_ROOT usado para
+    calcular caminhos relativos) usado por format_opportunity_issue,
+    evitando escrever no repositorio real durante os testes (issue #44)."""
+    business_dir = tmp_path / "specs" / "business"
+    business_dir.mkdir(parents=True)
+    monkeypatch.setattr("agent_preditivo.registration_agent._REPO_ROOT", tmp_path)
+    monkeypatch.setattr("agent_preditivo.registration_agent._BUSINESS_SPECS_DIR", business_dir)
+    return business_dir
 
 
 def test_format_bug_issue_preenche_campos_estruturados_em_codigo() -> None:
@@ -63,7 +78,7 @@ def test_format_bug_issue_usa_detail_como_fallback_se_llm_nao_seguir_formato() -
     assert "saturacao 90%" in body
 
 
-def test_format_opportunity_issue_preenche_campos_estruturados() -> None:
+def test_format_opportunity_issue_preenche_campos_estruturados(specs_dir) -> None:
     finding = OpportunityFinding(
         scenario_name="cenario_x",
         veredito="GAP",
@@ -74,12 +89,196 @@ def test_format_opportunity_issue_preenche_campos_estruturados() -> None:
 
     with patch(
         "agent_preditivo.registration_agent.chat",
-        return_value="RESUMO: lacuna encontrada\nCONTRATO_AFETADO: regra Y",
+        return_value=(
+            "RESUMO: lacuna encontrada\nCONTRATO_AFETADO: regra Y\n"
+            "SPECS_TECNICAS: database.md\nCRITERIO_ACEITE: - item 1\n- item 2"
+        ),
     ):
-        title, body = format_opportunity_issue(finding, scenario_path=None)
+        title, body, spec_path = format_opportunity_issue(finding, scenario_path=None)
 
     assert "cenario_x" in title
     assert "Categoria da mudança: regra de negócio" in body
+    assert spec_path.exists()
+
+
+def test_format_opportunity_issue_gera_secao_specs_tecnicas_marcando_relevantes(specs_dir) -> None:
+    finding = OpportunityFinding(
+        scenario_name="cenario_saldo",
+        veredito="GAP",
+        racional="viola regra de saldo",
+        observed_behavior="transação aceita sem saldo",
+        rule_chunks=[],
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value=(
+            "RESUMO: lacuna de saldo\nCONTRATO_AFETADO: regra de saldo\n"
+            "SPECS_TECNICAS: database.md, error-handling.md\n"
+            "CRITERIO_ACEITE: - transação com saldo insuficiente retorna 422\n- teste cobrindo o caso"
+        ),
+    ):
+        _, body, _ = format_opportunity_issue(finding, scenario_path=None)
+
+    assert "## Specs técnicas relevantes" in body
+    assert "- [x] database.md" in body
+    assert "- [x] error-handling.md" in body
+    assert "- [ ] stack.md" in body
+    assert "- [ ] security.md" in body
+
+
+def test_format_opportunity_issue_specs_tecnicas_sem_relevantes_marca_tudo_desmarcado(specs_dir) -> None:
+    finding = OpportunityFinding(
+        scenario_name="cenario_y", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value="RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: - item 1\n- item 2",
+    ):
+        _, body, _ = format_opportunity_issue(finding, scenario_path=None)
+
+    for spec in [
+        "stack.md",
+        "logging.md",
+        "database.md",
+        "error-handling.md",
+        "api-conventions.md",
+        "testing.md",
+        "observability.md",
+        "messaging.md",
+        "security.md",
+        "infrastructure.md",
+    ]:
+        assert f"- [ ] {spec}" in body
+
+
+def test_format_opportunity_issue_gera_criterio_de_aceite_real_nao_generico(specs_dir) -> None:
+    finding = OpportunityFinding(
+        scenario_name="cenario_z", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value=(
+            "RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\n"
+            "CRITERIO_ACEITE: - chave inexistente retorna 404\n- chave inativa retorna 422\n- teste cobrindo os dois casos"
+        ),
+    ):
+        _, body, _ = format_opportunity_issue(finding, scenario_path=None)
+
+    assert "A definir após triagem humana/agente local" not in body
+    assert "- [ ] chave inexistente retorna 404" in body
+    assert "- [ ] chave inativa retorna 422" in body
+    assert "- [ ] teste cobrindo os dois casos" in body
+
+
+def test_format_opportunity_issue_criterio_de_aceite_remove_marcadores_empilhados(specs_dir) -> None:
+    """Achado real na validacao ponta a ponta da issue #44: o LLM as vezes
+    devolve linhas com marcador duplicado (ex. "- - item"), que sem stripping
+    recursivo vazava um "- " residual dentro do texto do item."""
+    finding = OpportunityFinding(
+        scenario_name="cenario_v", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value=(
+            "RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\n"
+            "CRITERIO_ACEITE: - - O comportamento observado não respeita a regra\n- [ ] - outro item duplicado"
+        ),
+    ):
+        _, body, _ = format_opportunity_issue(finding, scenario_path=None)
+
+    assert "- [ ] O comportamento observado não respeita a regra" in body
+    assert "- [ ] outro item duplicado" in body
+    assert "- [ ] - " not in body
+
+
+def test_format_opportunity_issue_criterio_de_aceite_fallback_generico_quando_llm_nao_retorna_itens(
+    specs_dir,
+) -> None:
+    finding = OpportunityFinding(
+        scenario_name="cenario_w", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value="RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: ",
+    ):
+        _, body, _ = format_opportunity_issue(finding, scenario_path=None)
+
+    assert "- [ ] A definir após triagem humana/agente local" in body
+
+
+def test_format_opportunity_issue_cria_spec_de_negocio_com_numeracao_sequencial(specs_dir) -> None:
+    (specs_dir / "22-existente.md").write_text("x", encoding="utf-8")
+    (specs_dir / "23-outra-existente.md").write_text("x", encoding="utf-8")
+
+    finding = OpportunityFinding(
+        scenario_name="pix_key_conta_inexistente",
+        veredito="GAP",
+        racional="conta nunca validada",
+        observed_behavior="chave criada mesmo com account_id inexistente",
+        rule_chunks=[],
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value=(
+            "RESUMO: lacuna de validação\nCONTRATO_AFETADO: contrato de criação de chave\n"
+            "SPECS_TECNICAS: database.md\nCRITERIO_ACEITE: - item 1\n- item 2"
+        ),
+    ):
+        _, _, spec_path = format_opportunity_issue(finding, scenario_path=None)
+
+    assert spec_path.name == "24-pix-key-conta-inexistente.md"
+    assert spec_path.parent == specs_dir
+    content = spec_path.read_text(encoding="utf-8")
+    assert content.startswith("# 24 —")
+    assert "## Contexto" in content
+    assert "## Objetivo" in content
+    assert "## Critério de aceite" in content
+    assert "## Sinal de risco" in content
+    assert "## Dependências" in content
+
+
+def test_format_opportunity_issue_numera_a_partir_de_1_quando_diretorio_vazio(specs_dir) -> None:
+    finding = OpportunityFinding(
+        scenario_name="cenario_inicial", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value="RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: - item 1\n- item 2",
+    ):
+        _, _, spec_path = format_opportunity_issue(finding, scenario_path=None)
+
+    assert spec_path.name == "1-cenario-inicial.md"
+
+
+def test_format_opportunity_issue_spec_de_referencia_aponta_para_arquivo_criado_nao_para_cenario(
+    specs_dir,
+) -> None:
+    repo_root = specs_dir.parent.parent  # _REPO_ROOT, patchado pela fixture specs_dir
+    scenario_path = repo_root / "tests" / "scenarios" / "cenario_x.md"
+    scenario_path.parent.mkdir(parents=True, exist_ok=True)
+    scenario_path.write_text("x", encoding="utf-8")
+
+    finding = OpportunityFinding(
+        scenario_name="cenario_x", veredito="GAP", racional="x", observed_behavior="y", rule_chunks=[]
+    )
+
+    with patch(
+        "agent_preditivo.registration_agent.chat",
+        return_value="RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: - item 1\n- item 2",
+    ):
+        _, body, spec_path = format_opportunity_issue(finding, scenario_path=scenario_path)
+
+    spec_section = body.split("## Resumo")[0]
+    assert spec_path.name in spec_section
+    assert "tests/scenarios/cenario_x.md" not in spec_section.split("Cenário reproduzível:")[0]
+    assert "Cenário reproduzível: `tests/scenarios/cenario_x.md`" in body
 
 
 def test_register_bug_nao_cria_issue_se_sinal_ja_em_aberto() -> None:
@@ -154,7 +353,7 @@ def test_register_bug_sem_label_extra_quando_chaos_inativo() -> None:
     assert mock_create.call_args.kwargs["extra_labels"] is None
 
 
-def test_register_opportunity_cria_issue_e_notifica_quando_gap() -> None:
+def test_register_opportunity_cria_issue_e_notifica_quando_gap(specs_dir) -> None:
     finding = OpportunityFinding(
         scenario_name="cenario_x", veredito="GAP", racional="viola regra Y", observed_behavior="Z", rule_chunks=[]
     )
@@ -167,15 +366,64 @@ def test_register_opportunity_cria_issue_e_notifica_quando_gap() -> None:
         ) as mock_create,
         patch("agent_preditivo.registration_agent.agent_ops_db.register_signal"),
         patch(
-            "agent_preditivo.registration_agent.chat", return_value="RESUMO: lacuna\nCONTRATO_AFETADO: regra Y"
+            "agent_preditivo.registration_agent.chat",
+            return_value="RESUMO: lacuna\nCONTRATO_AFETADO: regra Y\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: - item 1\n- item 2",
         ),
         patch("agent_preditivo.registration_agent.notify_issue_created") as mock_notify,
+        patch("agent_preditivo.registration_agent._commit_and_push_spec") as mock_commit,
     ):
         result = register_opportunity(finding, scenario_path=None)
 
     assert result == 99
     mock_create.assert_called_once()
+    mock_commit.assert_called_once()
     mock_notify.assert_called_once_with(99, "[FASE 3] Oportunidade: cenario_x", "business-story", "https://github.com/x/y/issues/99")
+
+
+def test_register_opportunity_commita_e_empurra_spec_antes_de_criar_issue(specs_dir) -> None:
+    """Issue #44: a spec precisa existir no remoto antes da issue ser
+    aberta, ja que o agent-local roda em um clone separado."""
+    finding = OpportunityFinding(
+        scenario_name="cenario_x", veredito="GAP", racional="viola regra Y", observed_behavior="Z", rule_chunks=[]
+    )
+    chamadas = []
+
+    with (
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.create_issue",
+            side_effect=lambda *a, **k: chamadas.append("create_issue") or (99, "https://github.com/x/y/issues/99"),
+        ),
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal"),
+        patch(
+            "agent_preditivo.registration_agent.chat",
+            return_value="RESUMO: lacuna\nCONTRATO_AFETADO: regra Y\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: - item 1\n- item 2",
+        ),
+        patch("agent_preditivo.registration_agent.notify_issue_created"),
+        patch(
+            "agent_preditivo.registration_agent._commit_and_push_spec",
+            side_effect=lambda *a, **k: chamadas.append("commit_and_push"),
+        ),
+    ):
+        register_opportunity(finding, scenario_path=None)
+
+    assert chamadas == ["commit_and_push", "create_issue"]
+
+
+def test_commit_and_push_spec_executa_add_commit_push_do_arquivo(specs_dir) -> None:
+    from agent_preditivo.registration_agent import _commit_and_push_spec
+
+    spec_path = specs_dir / "24-exemplo.md"
+    spec_path.write_text("x", encoding="utf-8")
+
+    with patch("agent_preditivo.registration_agent.subprocess.run") as mock_run:
+        _commit_and_push_spec(spec_path)
+
+    commands = [call.args[0] for call in mock_run.call_args_list]
+    assert commands[0][:2] == ["git", "add"]
+    assert "specs/business/24-exemplo.md" in commands[0][2]
+    assert commands[1][:2] == ["git", "commit"]
+    assert commands[2] == ["git", "push", "origin", "main"]
 
 
 def test_register_opportunity_nao_cria_issue_quando_sem_gap() -> None:
