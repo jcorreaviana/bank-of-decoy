@@ -107,6 +107,16 @@ def unassign_self(number: int) -> None:
     _run(["issue", "edit", str(number), "--remove-assignee", "@me"])
 
 
+def close_issue(number: int) -> None:
+    """Mesma semantica de "resolvido" ja usada no caminho com diff (PR com
+    `Closes #N` no corpo, `gate.open_pull_request` - fechamento automatico
+    do GitHub ao dar merge). Destino 2 (no_action_needed) chega a uma
+    conclusao igualmente terminal sem passar por PR, entao fecha
+    diretamente aqui em vez de so desatribuir - unica forma de excluir a
+    issue definitivamente de `list_candidate_issues` (filtro `is:open`)."""
+    _run(["issue", "close", str(number)])
+
+
 def add_issue_label(number: int, label: str) -> None:
     _run(["issue", "edit", str(number), "--add-label", label])
 

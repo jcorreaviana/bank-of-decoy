@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from agent_local.github_client import (
     Issue,
     add_issue_label,
+    close_issue,
     create_pr,
     is_issue_open,
     list_candidate_issues,
@@ -106,6 +107,14 @@ def test_unassign_self_remove_o_proprio_usuario() -> None:
 
     args = mock_run.call_args.args[0]
     assert args == ["gh", "issue", "edit", "42", "--remove-assignee", "@me"]
+
+
+def test_close_issue() -> None:
+    with patch("agent_local.github_client.subprocess.run", return_value=_mock_run("")) as mock_run:
+        close_issue(42)
+
+    args = mock_run.call_args.args[0]
+    assert args == ["gh", "issue", "close", "42"]
 
 
 def test_add_issue_label() -> None:

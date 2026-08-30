@@ -29,6 +29,20 @@ def create_issue_branch(repo_dir: str, issue_number: int) -> str:
     return name
 
 
+def delete_local_branch(repo_dir: str, branch: str) -> None:
+    """Chamado apos destino 2 (no_action_needed, `polling._handle_no_action_needed`)
+    - essa branch nunca chega a ser empurrada (`push_branch` so roda no
+    caminho com diff), entao fica orfa no clone local se nao for removida
+    aqui. Achado real: uma issue selecionada de novo depois de um no-op
+    (antes de fechar a issue no mesmo destino) recriava o mesmo nome de
+    branch e colidia com o `git checkout -b` de `create_issue_branch`,
+    escalando para agent-stuck sem nenhuma falha real (so o rastro do
+    proprio sucesso anterior). Troca para `main` antes de apagar - nao da
+    para deletar a branch em que se esta."""
+    subprocess.run(["git", "checkout", "main"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "branch", "-D", branch], cwd=repo_dir, check=True)
+
+
 def push_branch(repo_dir: str, branch: str) -> None:
     """Unico ponto do wrapper que faz `git push` - deliberadamente FORA do
     `allowed_tools` da invocacao do SDK (ver sdk_invocation.py): o modelo

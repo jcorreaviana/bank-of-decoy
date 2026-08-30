@@ -160,11 +160,25 @@ def _handle_process_issue_failure(issue: Issue, exc: Exception, max_consecutive_
     )
 
 
-def _handle_no_action_needed(issue: Issue, risk: RiskScoreResult, sdk_result: SDKInvocationResult) -> dict:
+def _handle_no_action_needed(
+    issue: Issue, risk: RiskScoreResult, sdk_result: SDKInvocationResult, repo_dir: str, branch: str
+) -> dict:
     """Destino 2 (specs/tech/error-handling.md): `diff_lines == 0` com o SDK
     tendo concluido normalmente (`sdk_result.success`, ver docstring de
     `NO_ACTION_DECISION`). Nao passa por `push_branch`/`open_pull_request` -
-    registra a decisao, comenta o motivo e desatribui, sem PR."""
+    registra a decisao, comenta o motivo e fecha a issue (mesma semantica
+    terminal do caminho com diff, que fecha via `Closes #N` no merge do PR -
+    ver `github_client.close_issue`), sem PR.
+
+    Fechar (em vez de so desatribuir) e o que impede a issue de reaparecer
+    em `list_candidate_issues` (achado real: antes desta correcao, uma
+    issue resolvida como no-op continuava aberta e sem assignee, entao uma
+    selecao seguinte recriava a mesma branch de trabalho - `delete_local_branch`
+    abaixo - e colidia com o `git checkout -b` de `create_issue_branch`,
+    escalando para agent-stuck sem nenhuma falha real). A limpeza da branch
+    e melhor-esforco: se falhar, nao desfaz o fechamento ja feito (a causa
+    raiz - issue reaparecer como candidata - ja foi eliminada so pelo
+    close_issue; a branch orfa sozinha e inofensiva)."""
     agent_ops_db.record_risk_decision(
         issue_number=issue.number,
         risk_score=risk.score,
@@ -180,7 +194,18 @@ def _handle_no_action_needed(issue: Issue, risk: RiskScoreResult, sdk_result: SD
         "Nenhuma mudança de código foi necessária para esta issue - "
         f"o agente concluiu a análise sem gerar diff.\n\n{explicacao}",
     )
-    github_client.unassign_self(issue.number)
+    github_client.close_issue(issue.number)
+
+    try:
+        git_ops.delete_local_branch(repo_dir, branch)
+    except Exception:
+        logger.warning(
+            "Nao foi possivel limpar a branch local apos no-op - inofensivo "
+            "(issue ja fechada, nunca mais sera candidata), so deixa a "
+            "branch orfa no clone ate limpeza manual.",
+            exc_info=True,
+            extra={"context": {"issue_number": issue.number, "branch": branch}},
+        )
 
     logger.info(
         "Issue concluida sem necessidade de mudanca de codigo (no-op legitimo).",
@@ -262,7 +287,7 @@ def process_issue(issue: Issue) -> dict:
                     "nao ha confirmacao de que o SDK de fato concluiu a execucao, entao nao pode "
                     "ser tratado como no-op legitimo (destino 2)."
                 )
-            return _handle_no_action_needed(issue, risk, sdk_result)
+            return _handle_no_action_needed(issue, risk, sdk_result, repo_dir, branch)
 
         git_ops.push_branch(repo_dir, branch)
         pr_number, pr_url = open_pull_request(issue.number, branch, repo_dir, title=f"{issue.title} (#{issue.number})")

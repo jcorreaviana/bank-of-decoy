@@ -234,7 +234,9 @@ def test_process_issue_diff_lines_zero_com_sdk_sucesso_gera_no_action_needed() -
         patch("agent_local.polling.calculate_risk_score", return_value=risk),
         patch("agent_local.polling.agent_ops_db.record_risk_decision") as mock_record,
         patch("agent_local.polling.github_client.comment_issue") as mock_comment,
+        patch("agent_local.polling.github_client.close_issue") as mock_close,
         patch("agent_local.polling.github_client.unassign_self") as mock_unassign,
+        patch("agent_local.polling.git_ops.delete_local_branch") as mock_delete_branch,
         patch("agent_local.polling.git_ops.push_branch") as mock_push,
         patch("agent_local.polling.open_pull_request") as mock_open_pr,
         patch("agent_local.polling.apply_gate") as mock_apply_gate,
@@ -255,12 +257,54 @@ def test_process_issue_diff_lines_zero_com_sdk_sucesso_gera_no_action_needed() -
     mock_comment.assert_called_once()
     assert "nenhuma" in mock_comment.call_args.args[1].lower() or "Nenhuma" in mock_comment.call_args.args[1]
     assert "A issue ja esta implementada" in mock_comment.call_args.args[1]
-    mock_unassign.assert_called_once_with(41)
+
+    # Achado real: fechar (nao so desatribuir) e o que impede a issue de
+    # reaparecer em list_candidate_issues (filtro is:open) e recolidir com
+    # a propria branch de trabalho numa selecao seguinte.
+    mock_close.assert_called_once_with(41)
+    mock_unassign.assert_not_called()
+    mock_delete_branch.assert_called_once_with("/tmp/repo", "issue-41")
 
     mock_push.assert_not_called()
     mock_open_pr.assert_not_called()
     mock_apply_gate.assert_not_called()
     mock_add_label.assert_not_called()  # nao pode cair no caminho de retry/falha generica
+
+
+def test_process_issue_no_action_needed_falha_ao_limpar_branch_nao_propaga() -> None:
+    """A limpeza da branch e melhor-esforco: a causa raiz (issue reaparecer
+    como candidata) ja foi eliminada so pelo close_issue, entao uma falha
+    ao apagar a branch orfa nao pode reverter o resultado nem ser tratada
+    como falha de processamento (destino 3) - so logar e seguir."""
+    issue = _issue(number=41)
+    risk = _risk(diff_lines=0)
+    sdk_result = _sdk_result(success=True, result_text="nada a fazer")
+
+    with (
+        patch("agent_local.polling.get_settings", return_value=_full_settings()),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", return_value="/tmp/repo"),
+        patch("agent_local.polling.git_ops.create_issue_branch", return_value="issue-41"),
+        patch("agent_local.polling.invoke_sdk", return_value=sdk_result),
+        patch("agent_local.polling.test_runner.get_diff_stat") as mock_diff_stat,
+        patch("agent_local.polling.test_runner.detect_affected_services", return_value=[]),
+        patch("agent_local.polling.calculate_risk_score", return_value=risk),
+        patch("agent_local.polling.agent_ops_db.record_risk_decision"),
+        patch("agent_local.polling.github_client.comment_issue"),
+        patch("agent_local.polling.github_client.close_issue") as mock_close,
+        patch(
+            "agent_local.polling.git_ops.delete_local_branch",
+            side_effect=RuntimeError("branch ja foi apagada manualmente"),
+        ),
+        patch("agent_local.polling.notify_agent_error") as mock_notify,
+    ):
+        mock_diff_stat.return_value = MagicMock(files_changed=[], lines_changed=0)
+
+        result = process_issue(issue)  # nao deve levantar
+
+    assert result["decision"] == NO_ACTION_DECISION
+    mock_close.assert_called_once_with(41)
+    mock_notify.assert_not_called()
 
 
 def test_process_issue_diff_lines_zero_sem_sdk_success_cai_em_falha_generica() -> None:
