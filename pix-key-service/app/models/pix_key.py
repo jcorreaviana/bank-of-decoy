@@ -17,6 +17,16 @@ class PixKey(Base):
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # issue #62 (latencia_alta): a unique index acima e parcial
+        # (`deleted_at IS NULL`), entao nao cobre `get_by_valor_any`
+        # (repositories/pix_key_repository.py), que busca por `valor` SEM
+        # filtrar `deleted_at` - usada por GET /v1/pix-keys/lookup, chamada
+        # sincrona no caminho critico de toda criacao de transacao
+        # (transaction-service). Sem indice proprio, essa busca cai em
+        # sequential scan da tabela inteira. Indice comum (nao unico, nao
+        # parcial) em `valor` garante busca indexada independente do estado
+        # de `deleted_at`.
+        Index("ix_pix_keys_valor", "valor"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
