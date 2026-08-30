@@ -1,9 +1,18 @@
+import os
 from unittest.mock import patch
 
 import anyio
 import pytest
+from claude_agent_sdk import ResultMessage
 
-from agent_local.sdk_invocation import ALLOWED_TOOLS, _deny_out_of_scope_tools, build_task_prompt, invoke_sdk
+from agent_local.sdk_invocation import (
+    ALLOWED_TOOLS,
+    _ALLOWED_ENV_PASSTHROUGH,
+    _deny_out_of_scope_tools,
+    _minimal_subprocess_env,
+    build_task_prompt,
+    invoke_sdk,
+)
 
 
 def test_allowed_tools_nunca_inclui_push_ou_pr() -> None:
@@ -101,3 +110,79 @@ def test_invoke_sdk_timeout_explicito_levanta_timeout_mesmo_sem_excecao_do_sdk()
     with patch("agent_local.sdk_invocation.query", _hanging_query):
         with pytest.raises(TimeoutError):
             invoke_sdk("prompt", cwd=".", model="m", max_turns=1, timeout_seconds=0.05)
+
+
+def test_minimal_subprocess_env_reduz_a_so_a_lista_permitida() -> None:
+    """Achado real (vazamento de isolamento ao processar #55): variaveis
+    que identificam a sessao IDE anexada (CLAUDE_CODE_MESSAGING_SOCKET e
+    afins) sao herdadas por default pelo subprocess do SDK - o CLI
+    empacotado usa esse canal pra se conectar ao IDE, fazendo Read/Edit
+    resolverem contra a working tree real do operador em vez do `cwd`
+    isolado. Lista POSITIVA, nao negativa - uma variavel de vazamento nova
+    amanha continua bloqueada por definicao, sem precisar atualizar uma
+    lista de bloqueio."""
+    with patch.dict(
+        os.environ,
+        {
+            "PATH": "/usr/bin",
+            "CLAUDE_CODE_MESSAGING_SOCKET": "\\\\.\\pipe\\LOCAL\\cc-msg-fake",
+            "CLAUDE_CODE_MESSAGING_TOKEN": "fake-token",
+            "CLAUDE_CODE_SESSION_ID": "fake-session",
+            "CLAUDE_PID": "12345",
+            "VSCODE_PID": "999",
+            "ALGUMA_VARIAVEL_FUTURA_DESCONHECIDA": "qualquer-coisa",
+        },
+        clear=False,
+    ):
+        with _minimal_subprocess_env():
+            assert set(os.environ.keys()) <= set(_ALLOWED_ENV_PASSTHROUGH)
+            assert os.environ.get("PATH") == "/usr/bin"
+            assert "CLAUDE_CODE_MESSAGING_SOCKET" not in os.environ
+            assert "CLAUDE_CODE_MESSAGING_TOKEN" not in os.environ
+            assert "CLAUDE_CODE_SESSION_ID" not in os.environ
+            assert "CLAUDE_PID" not in os.environ
+            assert "VSCODE_PID" not in os.environ
+            assert "ALGUMA_VARIAVEL_FUTURA_DESCONHECIDA" not in os.environ
+
+
+def test_minimal_subprocess_env_restaura_tudo_depois_mesmo_com_excecao() -> None:
+    with patch.dict(os.environ, {"CLAUDE_CODE_MESSAGING_SOCKET": "fake"}, clear=False):
+        before = dict(os.environ)
+        with pytest.raises(RuntimeError):
+            with _minimal_subprocess_env():
+                assert "CLAUDE_CODE_MESSAGING_SOCKET" not in os.environ
+                raise RuntimeError("falha simulada dentro do bloco")
+
+        assert dict(os.environ) == before
+
+
+def test_invoke_sdk_reduz_environ_so_durante_a_chamada_ao_sdk() -> None:
+    """Verifica de ponta a ponta (sem mockar _minimal_subprocess_env) que
+    invoke_sdk realmente reduz o ambiente no momento em que o SDK roda, e
+    restaura completamente depois - nao so que a funcao auxiliar funciona
+    isolada."""
+    captured_env_during_call: dict = {}
+
+    async def _spy_query(*, prompt, options):
+        captured_env_during_call.update(os.environ)
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s1",
+            total_cost_usd=0.0,
+            result="ok",
+        )
+
+    with (
+        patch.dict(os.environ, {"CLAUDE_CODE_MESSAGING_SOCKET": "fake-vazamento"}, clear=False),
+        patch("agent_local.sdk_invocation.query", _spy_query),
+    ):
+        before = dict(os.environ)
+        invoke_sdk("prompt", cwd=".", model="m", max_turns=1, timeout_seconds=5.0)
+        after = dict(os.environ)
+
+    assert "CLAUDE_CODE_MESSAGING_SOCKET" not in captured_env_during_call
+    assert after == before  # restaurado por completo apos a chamada

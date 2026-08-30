@@ -156,6 +156,23 @@ O que o script faz, em ordem:
 
 **Como abortar com segurança no meio da janela**: `Ctrl+C` no terminal onde o script está rodando. O Windows propaga `CTRL_C_EVENT` para todo o console, então o ciclo de caos em andamento (se houver) roda seu próprio desligamento explícito (mesmo mecanismo do `chaos-orchestrator` sozinho, acima) antes de sair; o script grava o `stop_traffic.flag` e segue direto para o passo 6 (espera dos agentes) em vez de sair imediatamente — o ambiente nunca é derrubado e nenhum agente é interrompido por causa do abort. Um segundo `Ctrl+C` durante a própria espera (passo 6) só encerra o script — o ambiente e os agentes continuam rodando por conta própria, sem serem afetados.
 
+### Lançando os daemons (`agent-local` / `agent-preditivo`)
+
+```bash
+cd agent-local && .venv/Scripts/python.exe -m agent_local.polling      # loop continuo
+cd agent-preditivo && .venv/Scripts/python.exe -m agent_preditivo.polling
+```
+
+**Não lance o daemon do `agent-local` como subtarefa em background de uma sessão interativa do Claude Code/VS Code** (achado real, issue #66 - vazamento de isolamento entre o subprocess do SDK e a working tree real do operador). O daemon herda o ambiente de processo de quem o lança; se o lançador for uma sessão interativa do Claude Code, variáveis que identificam essa sessão para o IDE (`CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN`/`CLAUDE_CODE_SESSION_ID`) são repassadas ao subprocess do Claude Agent SDK que `agent_local.sdk_invocation.invoke_sdk` invoca por issue - o CLI empacotado usa esse canal para se conectar à sessão IDE ativa, fazendo Read/Edit resolverem contra a workspace real aberta no VS Code em vez do clone isolado (`agent-local/workspace/bank-of-decoy`) passado via `cwd`. `sdk_invocation.py` já reduz o ambiente do subprocess a uma lista positiva de variáveis (`_minimal_subprocess_env`, issue #66) como correção primária - mas rodar o daemon a partir de um terminal/serviço limpo, sem essa ancestralidade, é defesa em profundidade: reduz a superfície de qualquer variável nova que amanhã carregue o mesmo tipo de canal ambiente, sem depender só da lista de `_ALLOWED_ENV_PASSTHROUGH` estar completa.
+
+Antes de confiar num lançamento novo do daemon (versão nova do `claude_agent_sdk`/CLI, forma diferente de iniciar o processo), rode o teste de regressão real de isolamento:
+
+```bash
+cd agent-local && .venv/Scripts/python.exe -m pytest tests/integration/test_isolation_leak.py -v
+```
+
+(faz uma chamada real ao SDK - custa uso de API, não roda com a suíte rápida de `tests/unit/`.)
+
 ### Onde encontrar as evidências ao final da janela
 
 O resumo impresso ao final já traz os comandos prontos; os mesmos pontos, para referência:

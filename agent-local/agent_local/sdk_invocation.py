@@ -52,6 +52,8 @@ multi-usuario de terceiros, nao automacao individual sobre o proprio
 projeto.
 """
 
+import contextlib
+import os
 import re
 from dataclasses import dataclass
 
@@ -63,6 +65,67 @@ from claude_agent_sdk import (
     ResultMessage,
     query,
 )
+
+_ALLOWED_ENV_PASSTHROUGH = (
+    "PATH",
+    "SYSTEMROOT",  # Windows: exigido por varias APIs do SO (winsock, crypto) mesmo sem uso direto daqui
+    "USERPROFILE",  # Windows: resolve ~ para ~/.claude/.credentials.json (autenticacao, ver docstring do modulo)
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "HOME",  # equivalente POSIX de USERPROFILE, para portabilidade futura
+    "TEMP",
+    "TMP",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "COMSPEC",
+    "PATHEXT",
+)
+"""Lista positiva (achado real, issue de vazamento de isolamento): o SDK
+(`subprocess_cli.py`, `_connect`) monta o ambiente do subprocess como
+`{**inherited_env, **options.env}` - ou seja, `ClaudeAgentOptions(env=...)`
+so SOBREPOE chaves especificas, nunca substitui `os.environ` herdado por
+completo. Uma tentativa de "whitelist" so via `options.env` nao funcionaria
+por esse motivo - `_minimal_subprocess_env()` abaixo e a unica forma real
+de garantir que so estas variaveis cheguem ao subprocess, reduzindo o
+`os.environ` do PROPRIO processo chamador (so durante a chamada, ver
+`invoke_sdk`). Deliberadamente NAO e uma lista negativa de variaveis
+conhecidas por vazar (`CLAUDE_CODE_MESSAGING_SOCKET` etc.) - isso reabriria
+o mesmo buraco no dia em que uma variavel nova aparecer no ambiente."""
+
+
+@contextlib.contextmanager
+def _minimal_subprocess_env():
+    """Reduz `os.environ` do processo chamador a `_ALLOWED_ENV_PASSTHROUGH`
+    só durante o bloco, restaurando tudo depois (inclusive em caso de
+    excecao). Escopo deliberadamente estreito - so ao redor da chamada ao
+    SDK, nunca o processo inteiro do daemon: `github_client`/`git_ops`
+    tambem rodam subprocess (`gh`, `git`) mas nao fazem parte da superficie
+    deste vazamento (nao spawnam o CLI da Claude Agent SDK), e podem
+    depender de outras variaveis do ambiente normal.
+
+    Achado real: um daemon do agent-local lancado como subtarefa em
+    background de uma sessao interativa do Claude Code dentro do VS Code
+    herda variaveis que identificam essa sessao para o IDE
+    (`CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN`/
+    `CLAUDE_CODE_SESSION_ID`, entre outras) - o CLI empacotado que o SDK
+    invoca (`claude_agent_sdk/_bundled/claude.exe`) contem logica para se
+    conectar a essa sessao IDE quando essas variaveis estao presentes,
+    fazendo com que Read/Edit (e possivelmente outras ferramentas)
+    resolvam caminhos contra a workspace root do IDE anexado, e nao contra
+    o `cwd` explicitamente passado a `ClaudeAgentOptions`. Reproduzido de
+    forma controlada e deterministica (arquivo-marcador distinto no clone
+    isolado vs. na working tree externa) - ver
+    `tests/integration/test_isolation_leak.py`."""
+    original = dict(os.environ)
+    try:
+        os.environ.clear()
+        for key in _ALLOWED_ENV_PASSTHROUGH:
+            if key in original:
+                os.environ[key] = original[key]
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(original)
 
 ALLOWED_TOOLS = [
     "Read",
@@ -176,4 +239,5 @@ def invoke_sdk(
             session_id=session_id,
         )
 
-    return anyio.run(_run)
+    with _minimal_subprocess_env():
+        return anyio.run(_run)
