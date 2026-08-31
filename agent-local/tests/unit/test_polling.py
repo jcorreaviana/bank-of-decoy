@@ -208,9 +208,9 @@ def _risk(diff_lines: int) -> RiskScoreResult:
     )
 
 
-def _sdk_result(success: bool, result_text: str = "") -> SDKInvocationResult:
+def _sdk_result(success: bool, result_text: str = "", duration_ms: int | None = None) -> SDKInvocationResult:
     return SDKInvocationResult(
-        success=success, result_text=result_text, total_cost_usd=0.05, session_id="session-1"
+        success=success, result_text=result_text, total_cost_usd=0.05, session_id="session-1", duration_ms=duration_ms
     )
 
 
@@ -269,6 +269,40 @@ def test_process_issue_diff_lines_zero_com_sdk_sucesso_gera_no_action_needed() -
     mock_open_pr.assert_not_called()
     mock_apply_gate.assert_not_called()
     mock_add_label.assert_not_called()  # nao pode cair no caminho de retry/falha generica
+
+
+def test_process_issue_no_action_needed_repassa_custo_e_duracao_do_sdk() -> None:
+    """Issue #80: assim como no caminho com PR (gate.py), o destino 2
+    (no-op) tambem precisa repassar `total_cost_usd`/`duration_ms` do
+    `SDKInvocationResult` para `record_risk_decision` - sem este teste,
+    remover essas duas linhas em `_handle_no_action_needed` nao quebraria
+    nenhum teste existente."""
+    issue = _issue(number=41)
+    risk = _risk(diff_lines=0)
+    sdk_result = _sdk_result(success=True, result_text="nada a fazer", duration_ms=12345)
+
+    with (
+        patch("agent_local.polling.get_settings", return_value=_full_settings()),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", return_value="/tmp/repo"),
+        patch("agent_local.polling.git_ops.create_issue_branch", return_value="issue-41"),
+        patch("agent_local.polling.invoke_sdk", return_value=sdk_result),
+        patch("agent_local.polling.test_runner.get_diff_stat") as mock_diff_stat,
+        patch("agent_local.polling.test_runner.detect_affected_services", return_value=[]),
+        patch("agent_local.polling.calculate_risk_score", return_value=risk),
+        patch("agent_local.polling.agent_ops_db.record_risk_decision") as mock_record,
+        patch("agent_local.polling.github_client.comment_issue"),
+        patch("agent_local.polling.github_client.close_issue"),
+        patch("agent_local.polling.github_client.unassign_self"),
+        patch("agent_local.polling.git_ops.delete_local_branch"),
+    ):
+        mock_diff_stat.return_value = MagicMock(files_changed=[], lines_changed=0)
+
+        process_issue(issue)
+
+    kwargs = mock_record.call_args.kwargs
+    assert kwargs["total_cost_usd"] == 0.05
+    assert kwargs["sdk_duration_ms"] == 12345
 
 
 def test_process_issue_no_action_needed_falha_ao_limpar_branch_nao_propaga() -> None:

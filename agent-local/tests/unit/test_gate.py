@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from agent_local.gate import apply_gate
 from agent_local.risk_score import RiskFields, RiskScoreResult
+from agent_local.sdk_invocation import SDKInvocationResult
 
 
 def _risk(decision: str, score: float = 10.0, threshold: float = 20.0) -> RiskScoreResult:
@@ -82,6 +83,62 @@ def test_apply_gate_registra_auditoria_com_campos_corretos() -> None:
     assert kwargs["risk_score"] == 15.5
     assert kwargs["threshold_used"] == 20.0
     assert kwargs["service_criticality"] == "critico"
+
+
+def test_apply_gate_repassa_custo_e_duracao_do_sdk_para_auditoria() -> None:
+    """Issue #80: `total_cost_usd`/`duration_ms` capturados em
+    `SDKInvocationResult` precisam chegar em `record_risk_decision` - sem
+    este teste, remover as duas linhas que repassam esses campos em
+    `apply_gate` nao quebraria nenhum teste existente."""
+    sdk_result = SDKInvocationResult(
+        success=True,
+        result_text="ok",
+        total_cost_usd=0.4321,
+        session_id="session-1",
+        duration_ms=9876,
+    )
+
+    with (
+        patch("agent_local.gate.github_client.comment_pr"),
+        patch("agent_local.gate.github_client.merge_pr"),
+        patch("agent_local.gate.agent_ops_db.record_risk_decision") as mock_record,
+        patch("agent_local.gate.notify_auto_merge"),
+        patch("agent_local.gate.notify_pr_needs_review"),
+    ):
+        apply_gate(
+            issue_number=42,
+            pr_number=7,
+            pr_url="https://github.com/x/y/pull/7",
+            risk=_risk("autonomo", score=15.5, threshold=20.0),
+            sdk_result=sdk_result,
+        )
+
+    kwargs = mock_record.call_args.kwargs
+    assert kwargs["total_cost_usd"] == 0.4321
+    assert kwargs["sdk_duration_ms"] == 9876
+
+
+def test_apply_gate_sem_sdk_result_registra_custo_e_duracao_nulos() -> None:
+    """Decisoes sem invocacao de SDK associada (ex. agent-preditivo) devem
+    persistir `total_cost_usd`/`sdk_duration_ms` como `None`, nunca omitir
+    os kwargs nem quebrar."""
+    with (
+        patch("agent_local.gate.github_client.comment_pr"),
+        patch("agent_local.gate.github_client.merge_pr"),
+        patch("agent_local.gate.agent_ops_db.record_risk_decision") as mock_record,
+        patch("agent_local.gate.notify_auto_merge"),
+        patch("agent_local.gate.notify_pr_needs_review"),
+    ):
+        apply_gate(
+            issue_number=42,
+            pr_number=7,
+            pr_url="https://github.com/x/y/pull/7",
+            risk=_risk("autonomo", score=15.5, threshold=20.0),
+        )
+
+    kwargs = mock_record.call_args.kwargs
+    assert kwargs["total_cost_usd"] is None
+    assert kwargs["sdk_duration_ms"] is None
 
 
 def test_apply_gate_loga_info_com_racional_no_merge_automatico(caplog) -> None:
