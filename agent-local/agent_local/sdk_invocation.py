@@ -176,6 +176,11 @@ class SDKInvocationResult:
     result_text: str
     total_cost_usd: float | None
     session_id: str | None
+    duration_ms: int | None = None
+    """Duracao total da chamada (`ResultMessage.duration_ms`, tempo de
+    parede reportado pelo proprio SDK - inclui overhead de subprocess, nao
+    so tempo de API) - persistida em `risk_decisions` (issue #80) junto com
+    `total_cost_usd`, hoje so disponivel em log/stdout."""
 
 
 def build_task_prompt(issue_number: int, issue_title: str, issue_body: str, spec_text: str | None) -> str:
@@ -226,17 +231,20 @@ def invoke_sdk(
         result_text = ""
         total_cost_usd = None
         session_id = None
+        duration_ms = None
         with anyio.fail_after(timeout_seconds):
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, ResultMessage):
                     result_text = message.result or ""
                     total_cost_usd = message.total_cost_usd
                     session_id = message.session_id
+                    duration_ms = message.duration_ms
         return SDKInvocationResult(
             success=bool(result_text),
             result_text=result_text,
             total_cost_usd=total_cost_usd,
             session_id=session_id,
+            duration_ms=duration_ms,
         )
 
     with _minimal_subprocess_env():

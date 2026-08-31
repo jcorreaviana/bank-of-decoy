@@ -112,6 +112,32 @@ def test_invoke_sdk_timeout_explicito_levanta_timeout_mesmo_sem_excecao_do_sdk()
             invoke_sdk("prompt", cwd=".", model="m", max_turns=1, timeout_seconds=0.05)
 
 
+def test_invoke_sdk_retorna_custo_e_duracao_do_result_message() -> None:
+    """Issue #80: `total_cost_usd` e `duration_ms` do `ResultMessage` do SDK
+    precisam sobreviver ate o `SDKInvocationResult` retornado, para que
+    quem persiste a decisao (gate.py/polling.py) tenha acesso a eles - antes
+    so `total_cost_usd` era capturado e nada de duracao."""
+
+    async def _spy_query(*, prompt, options):
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=4321,
+            duration_api_ms=4000,
+            is_error=False,
+            num_turns=2,
+            session_id="s2",
+            total_cost_usd=0.42,
+            result="ok",
+        )
+
+    with patch("agent_local.sdk_invocation.query", _spy_query):
+        result = invoke_sdk("prompt", cwd=".", model="m", max_turns=1, timeout_seconds=5.0)
+
+    assert result.total_cost_usd == 0.42
+    assert result.duration_ms == 4321
+    assert result.session_id == "s2"
+
+
 def test_minimal_subprocess_env_reduz_a_so_a_lista_permitida() -> None:
     """Achado real (vazamento de isolamento ao processar #55): variaveis
     que identificam a sessao IDE anexada (CLAUDE_CODE_MESSAGING_SOCKET e

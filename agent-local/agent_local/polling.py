@@ -186,6 +186,8 @@ def _handle_no_action_needed(
         service_criticality=risk.risk_fields.criticality,
         decision=NO_ACTION_DECISION,
         pr_number=None,
+        total_cost_usd=sdk_result.total_cost_usd,
+        sdk_duration_ms=sdk_result.duration_ms,
     )
 
     explicacao = sdk_result.result_text.strip() if sdk_result.result_text else "(SDK nao retornou explicacao adicional)"
@@ -291,7 +293,7 @@ def process_issue(issue: Issue) -> dict:
 
         git_ops.push_branch(repo_dir, branch)
         pr_number, pr_url = open_pull_request(issue.number, branch, repo_dir, title=f"{issue.title} (#{issue.number})")
-        decision = apply_gate(issue.number, pr_number, pr_url, risk)
+        decision = apply_gate(issue.number, pr_number, pr_url, risk, sdk_result=sdk_result)
 
         return {
             "issue_number": issue.number,

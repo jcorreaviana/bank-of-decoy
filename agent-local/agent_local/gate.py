@@ -12,6 +12,7 @@ from notifications import notify_auto_merge, notify_pr_needs_review
 
 from agent_local import agent_ops_db, github_client
 from agent_local.risk_score import RiskScoreResult
+from agent_local.sdk_invocation import SDKInvocationResult
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,13 @@ def open_pull_request(issue_number: int, branch: str, repo_dir: str, title: str)
     return github_client.create_pr(title=title, body=body, base="main", head=branch, cwd=repo_dir)
 
 
-def apply_gate(issue_number: int, pr_number: int, pr_url: str, risk: RiskScoreResult) -> str:
+def apply_gate(
+    issue_number: int,
+    pr_number: int,
+    pr_url: str,
+    risk: RiskScoreResult,
+    sdk_result: SDKInvocationResult | None = None,
+) -> str:
     """Retorna a decisao aplicada ("autonomo" | "humano") apos executar as
     acoes correspondentes (merge ou label+comentario)."""
     racional = (
@@ -76,6 +83,8 @@ def apply_gate(issue_number: int, pr_number: int, pr_url: str, risk: RiskScoreRe
         service_criticality=risk.risk_fields.criticality,
         decision=risk.decision,
         pr_number=pr_number,
+        total_cost_usd=sdk_result.total_cost_usd if sdk_result else None,
+        sdk_duration_ms=sdk_result.duration_ms if sdk_result else None,
     )
 
     return risk.decision

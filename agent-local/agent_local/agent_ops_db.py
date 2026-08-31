@@ -33,7 +33,13 @@ def record_risk_decision(
     service_criticality: str,
     decision: str,
     pr_number: int | None = None,
+    total_cost_usd: float | None = None,
+    sdk_duration_ms: int | None = None,
 ) -> uuid.UUID:
+    """`total_cost_usd`/`sdk_duration_ms` (issue #80): custo e duracao da
+    chamada ao Claude Agent SDK que originou esta decisao
+    (`SDKInvocationResult`, sdk_invocation.py) - antes so iam para log,
+    impedindo reconstruir custo por ciclo retroativamente."""
     engine = _get_engine()
     agora = datetime.now(timezone.utc)
     decision_id = uuid.uuid4()
@@ -48,6 +54,8 @@ def record_risk_decision(
                 service_criticality=service_criticality,
                 decision=decision,
                 decided_at=agora,
+                total_cost_usd=total_cost_usd,
+                sdk_duration_ms=sdk_duration_ms,
                 created_at=agora,
             )
         )
