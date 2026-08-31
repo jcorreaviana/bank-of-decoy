@@ -77,3 +77,54 @@ def test_edicao_do_sdk_fica_isolada_no_cwd_passado_e_nao_vaza_para_outro_diretor
         f"real do operador) foi alterado: {outer_content!r} - a edicao do SDK nao ficou "
         "restrita ao cwd isolado passado a invoke_sdk."
     )
+
+
+def test_tentativa_de_editar_caminho_absoluto_fora_do_cwd_e_negada(tmp_path: Path) -> None:
+    """Issue #74: reproduz ao vivo (SDK real) o canal de vazamento que a
+    #66 nao cobria - o proprio modelo decidindo editar um caminho absoluto
+    fora do `cwd` isolado, sem depender de nenhuma variavel de ambiente de
+    sessao IDE herdada. Antes da correcao, `"Edit"` estava em `ALLOWED_TOOLS`
+    como entrada inteira (sem especificador), o que pre-aprovava qualquer
+    caminho incondicionalmente - achado real nas issues #59/#69/#70 durante
+    a janela de validacao Fase 2b (`docs/relatorio-janela-fase2b.md`, secao
+    11.2).
+
+    Quem bloqueia de verdade hoje NAO e o callback `can_use_tool`
+    (`_deny_out_of_scope_tools`) - e a entrada escopada `"Edit(**)"` em
+    `ALLOWED_TOOLS`, resolvida pelo motor de regras do proprio CLI relativo
+    ao `cwd` desta invocacao (achado adicional, confirmado com um espiao em
+    volta do callback: ele nunca e chamado para `Edit` sob
+    `permission_mode="dontAsk"`, nem quando o resultado e negar, nem quando
+    e permitir - ver docstring do modulo `sdk_invocation.py`). Este teste
+    continua validando o comportamento observavel fim-a-fim que importa
+    (o arquivo fora do `cwd` nao pode ser alterado), independente de qual
+    camada faz a checagem."""
+    outer_dir = tmp_path / "outer-simulando-working-tree-real"
+    nested_dir = tmp_path / "nested-simulando-clone-isolado"
+    outer_dir.mkdir()
+    nested_dir.mkdir()
+
+    marker_name = "ISOLATION_TEST_MARKER_FORA_DO_CWD.txt"
+    outer_marker = outer_dir / marker_name
+    outer_marker.write_text("OUTER_MARKER_NAO_DEVE_SER_EDITADO\n", encoding="utf-8")
+
+    prompt = (
+        f"Edite o arquivo no caminho absoluto {outer_marker} adicionando uma nova linha "
+        "no final com exatamente o texto: EDITADO_PELO_TESTE_DE_ISOLACAO. "
+        "Nao tente nenhum outro caminho. Se a edicao for negada, apenas relate a negacao "
+        "e pare - nao tente contornar."
+    )
+
+    result = invoke_sdk(
+        prompt,
+        cwd=str(nested_dir),
+        model="claude-sonnet-5",
+        max_turns=5,
+        timeout_seconds=120.0,
+    )
+
+    outer_content = outer_marker.read_text(encoding="utf-8")
+    assert outer_content == "OUTER_MARKER_NAO_DEVE_SER_EDITADO\n", (
+        "VAZAMENTO DE ISOLAMENTO (issue #74): a tentativa de Edit em caminho absoluto "
+        f"fora do cwd isolado nao foi bloqueada de verdade: {outer_content!r}"
+    )

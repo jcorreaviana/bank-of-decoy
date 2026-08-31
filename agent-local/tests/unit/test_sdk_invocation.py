@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import anyio
@@ -8,7 +9,7 @@ from claude_agent_sdk import ResultMessage
 from agent_local.sdk_invocation import (
     ALLOWED_TOOLS,
     _ALLOWED_ENV_PASSTHROUGH,
-    _deny_out_of_scope_tools,
+    _make_deny_out_of_scope_tools,
     _minimal_subprocess_env,
     build_task_prompt,
     invoke_sdk,
@@ -28,7 +29,7 @@ def test_allowed_tools_nunca_inclui_push_ou_pr() -> None:
 def test_allowed_tools_escopo_exato_da_issue() -> None:
     assert ALLOWED_TOOLS == [
         "Read",
-        "Edit",
+        "Edit(**)",
         "Bash(pytest *)",
         "Bash(alembic *)",
         "Bash(git add *)",
@@ -36,6 +37,19 @@ def test_allowed_tools_escopo_exato_da_issue() -> None:
         "Bash(git diff *)",
         "Bash(git status *)",
     ]
+
+
+def test_allowed_tools_nao_inclui_edit_como_entrada_inteira() -> None:
+    """Issue #74: uma entrada `"Edit"` sem especificador blinda
+    (`CanUseToolShadowedWarning`) `can_use_tool` E pre-aprova qualquer
+    caminho incondicionalmente - foi essa entrada que permitiu o vazamento
+    das issues #59/#69/#70. A entrada escopada `"Edit(**)"` (com
+    especificador real, nao `""`/`"*"`) e o que efetivamente restringe ao
+    `cwd` da invocacao no motor de regras do proprio CLI - confirmado
+    contra o SDK real com um espiao no callback (ver docstring de
+    `_make_deny_out_of_scope_tools`)."""
+    assert "Edit" not in ALLOWED_TOOLS
+    assert "Edit(**)" in ALLOWED_TOOLS
 
 
 def test_build_task_prompt_inclui_numero_titulo_e_corpo_da_issue() -> None:
@@ -55,8 +69,9 @@ def test_build_task_prompt_inclui_spec_quando_fornecida() -> None:
     assert "conteudo da spec de referencia" in prompt
 
 
-def _call_deny(tool_name: str, input_data: dict):
-    return anyio.run(_deny_out_of_scope_tools, tool_name, input_data, None)
+def _call_deny(tool_name: str, input_data: dict, cwd: str = "."):
+    deny = _make_deny_out_of_scope_tools(cwd)
+    return anyio.run(deny, tool_name, input_data, None)
 
 
 def test_deny_bloqueia_git_push() -> None:
@@ -88,6 +103,87 @@ def test_deny_permite_bash_com_padrao_permitido() -> None:
 def test_deny_permite_read_e_edit() -> None:
     assert type(_call_deny("Read", {"file_path": "x.py"})).__name__ == "PermissionResultAllow"
     assert type(_call_deny("Edit", {"file_path": "x.py"})).__name__ == "PermissionResultAllow"
+
+
+def test_deny_bloqueia_edit_fora_do_cwd_isolado(tmp_path: Path) -> None:
+    """Issue #74: reproduz o vazamento observado nas issues #59/#69/#70 da
+    janela de validacao - o modelo tenta editar um caminho absoluto fora do
+    `cwd` isolado passado a `invoke_sdk`. Antes da correcao, `Edit` era
+    permitido incondicionalmente e essa tentativa passava."""
+    allowed_root = tmp_path / "nested-simulando-clone-isolado"
+    outer_dir = tmp_path / "outer-simulando-working-tree-real"
+    allowed_root.mkdir()
+    outer_dir.mkdir()
+    outside_file = outer_dir / "arquivo.py"
+    outside_file.write_text("", encoding="utf-8")
+
+    result = _call_deny("Edit", {"file_path": str(outside_file)}, cwd=str(allowed_root))
+
+    assert type(result).__name__ == "PermissionResultDeny"
+
+
+def test_deny_permite_edit_com_caminho_absoluto_dentro_do_cwd_isolado(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "nested-simulando-clone-isolado"
+    allowed_root.mkdir()
+    inside_file = allowed_root / "subpasta" / "arquivo.py"
+    inside_file.parent.mkdir()
+    inside_file.write_text("", encoding="utf-8")
+
+    result = _call_deny("Edit", {"file_path": str(inside_file)}, cwd=str(allowed_root))
+
+    assert type(result).__name__ == "PermissionResultAllow"
+
+
+def test_deny_bloqueia_edit_com_caminho_relativo_que_escapa_do_cwd_via_dotdot(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "nested-simulando-clone-isolado"
+    outer_dir = tmp_path / "outer-simulando-working-tree-real"
+    allowed_root.mkdir()
+    outer_dir.mkdir()
+    (outer_dir / "arquivo.py").write_text("", encoding="utf-8")
+
+    result = _call_deny("Edit", {"file_path": "../outer-simulando-working-tree-real/arquivo.py"}, cwd=str(allowed_root))
+
+    assert type(result).__name__ == "PermissionResultDeny"
+
+
+def test_deny_bloqueia_edit_sem_file_path() -> None:
+    result = _call_deny("Edit", {})
+    assert type(result).__name__ == "PermissionResultDeny"
+
+
+def test_invoke_sdk_usa_cwd_da_chamada_para_o_callback_de_permissao(tmp_path: Path) -> None:
+    """Verifica de ponta a ponta que `invoke_sdk` monta o callback vinculado
+    ao `cwd` recebido (nao a um cwd fixo/global) - captura o `can_use_tool`
+    passado a `ClaudeAgentOptions` e confirma que ele nega um caminho fora
+    do `cwd` desta chamada especifica."""
+    allowed_root = tmp_path / "nested"
+    outer_dir = tmp_path / "outer"
+    allowed_root.mkdir()
+    outer_dir.mkdir()
+    outside_file = outer_dir / "arquivo.py"
+    outside_file.write_text("", encoding="utf-8")
+
+    captured_options = {}
+
+    async def _spy_query(*, prompt, options):
+        captured_options["options"] = options
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s1",
+            total_cost_usd=0.0,
+            result="ok",
+        )
+
+    with patch("agent_local.sdk_invocation.query", _spy_query):
+        invoke_sdk("prompt", cwd=str(allowed_root), model="m", max_turns=1, timeout_seconds=5.0)
+
+    can_use_tool = captured_options["options"].can_use_tool
+    result = anyio.run(can_use_tool, "Edit", {"file_path": str(outside_file)}, None)
+    assert type(result).__name__ == "PermissionResultDeny"
 
 
 def test_deny_bloqueia_ferramentas_nao_read_edit_bash() -> None:
