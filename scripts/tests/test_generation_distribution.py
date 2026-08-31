@@ -18,11 +18,19 @@ from risk_engine.onboarding import CPFS_PEP_SIMULADOS
 
 AMOSTRA = 10_000
 SEED = 20260826
+# fixo no import do modulo (nao a cada chamada) - _rodar_amostra congela o
+# momento de transacoes tardias em `agora` (generation.gerar_transacoes,
+# `min(momento + incremento, agora)`), e esse momento congelado alimenta o
+# sinal de risco horario_atipico (hora == 3). Se cada chamada capturasse seu
+# proprio datetime.now(), duas chamadas com a MESMA seed veriam `agora`
+# diferentes - e mesma seed deveria bastar para determinismo, sem depender
+# de quando no relogio de parede o teste rodou.
+AGORA = datetime.now(timezone.utc)
 
 
 def _rodar_amostra(seed: int, amostra: int = AMOSTRA):
     rng = random.Random(seed)
-    agora = datetime.now(timezone.utc)
+    agora = AGORA
 
     reprovados = 0
     contas = 0
