@@ -184,3 +184,5 @@ O resumo impresso ao final já traz os comandos prontos; os mesmos pontos, para 
 - **Logs desta execução**: `scripts/validation_window_logs/<timestamp>/` — log do gerador de tráfego e de cada ciclo do `chaos-orchestrator`.
 
 Testes em `scripts/tests/test_validation_window.py` cobrem só a lógica pura (decisão de "há pendência?", leitura de intervalo do `.env`) com `pytest`, sem depender de `gh`/Docker reais — a parte que fala com o mundo real foi validada manualmente contra o ambiente e o GitHub reais (ambiente efêmero + uma issue de teste real criada/atribuída/fechada para confirmar a detecção, depois removida).
+
+<!-- validacao real issue #74 - ciclo do daemon agent-local -->
