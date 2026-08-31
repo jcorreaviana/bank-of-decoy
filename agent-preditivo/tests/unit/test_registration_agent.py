@@ -1,12 +1,14 @@
 import logging
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agent_preditivo.bug_detection import BugSignal
 from agent_preditivo.opportunity_detection import OpportunityFinding
 from agent_preditivo.registration_agent import (
+    find_open_github_issue,
     format_bug_issue,
     format_opportunity_issue,
     register_bug,
@@ -498,12 +500,15 @@ def test_register_bug_nao_cria_issue_se_sinal_ja_em_aberto() -> None:
 
     with (
         patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value={"id": "existing"}),
+        patch("agent_preditivo.registration_agent.find_open_github_issue") as mock_gh_find,
         patch("agent_preditivo.registration_agent.create_issue") as mock_create,
     ):
         result = register_bug(signal)
 
     assert result is None
     mock_create.assert_not_called()
+    # checagem local (flagged_signals) ja bastou - nao precisa consultar o GitHub
+    mock_gh_find.assert_not_called()
 
 
 def test_register_bug_cria_issue_e_registra_signal_quando_novo() -> None:
@@ -511,6 +516,7 @@ def test_register_bug_cria_issue_e_registra_signal_quando_novo() -> None:
 
     with (
         patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch("agent_preditivo.registration_agent.find_open_github_issue", return_value=None),
         patch(
             "agent_preditivo.registration_agent.create_issue",
             return_value=(42, "https://github.com/x/y/issues/42"),
@@ -532,6 +538,7 @@ def test_register_bug_adiciona_label_chaos_test_quando_chaos_ativo() -> None:
 
     with (
         patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch("agent_preditivo.registration_agent.find_open_github_issue", return_value=None),
         patch(
             "agent_preditivo.registration_agent.create_issue",
             return_value=(42, "https://github.com/x/y/issues/42"),
@@ -551,6 +558,7 @@ def test_register_bug_sem_label_extra_quando_chaos_inativo() -> None:
 
     with (
         patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch("agent_preditivo.registration_agent.find_open_github_issue", return_value=None),
         patch(
             "agent_preditivo.registration_agent.create_issue",
             return_value=(42, "https://github.com/x/y/issues/42"),
@@ -565,6 +573,72 @@ def test_register_bug_sem_label_extra_quando_chaos_inativo() -> None:
     assert mock_create.call_args.kwargs["extra_labels"] is None
 
 
+def test_register_bug_nao_duplica_quando_issue_equivalente_ja_aberta_no_github() -> None:
+    """Issue #77: flagged_signals (Postgres efemero) nao tinha o sinal, mas
+    o GitHub ja tem uma issue aberta equivalente - nao deve criar duplicata,
+    deve comentar a nova ocorrência na issue existente."""
+    signal = BugSignal(service="pix-key-service", signal_type="latencia_alta", detail="p95 alto")
+
+    with (
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.find_open_github_issue",
+            return_value={"number": 63, "title": "[BUG] latencia_alta em pix-key-service", "url": "x"},
+        ),
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal") as mock_register,
+        patch("agent_preditivo.registration_agent._comment_duplicate_occurrence") as mock_comment,
+        patch("agent_preditivo.registration_agent.create_issue") as mock_create,
+    ):
+        result = register_bug(signal)
+
+    assert result is None
+    mock_create.assert_not_called()
+    mock_register.assert_called_once_with("latencia_alta", "pix-key-service", issue_number=63)
+    mock_comment.assert_called_once()
+    assert mock_comment.call_args.args[0] == 63
+
+
+def test_find_open_github_issue_faz_match_por_substring_case_insensitive_no_titulo() -> None:
+    fake_result = MagicMock()
+    fake_result.stdout = (
+        '[{"number": 63, "title": "[FASE 3] Oportunidade: onboarding_get_inexistente", "url": "x"},'
+        '{"number": 70, "title": "[BUG] latencia_alta em account-service", "url": "y"}]'
+    )
+
+    with patch("agent_preditivo.registration_agent.subprocess.run", return_value=fake_result) as mock_run:
+        found = find_open_github_issue("business-story", "ONBOARDING_GET_INEXISTENTE")
+
+    assert found is not None
+    assert found["number"] == 63
+    assert mock_run.call_args.args[0][:6] == ["gh", "issue", "list", "--state", "open", "--label"]
+
+
+def test_find_open_github_issue_retorna_none_quando_nao_ha_match() -> None:
+    fake_result = MagicMock()
+    fake_result.stdout = '[{"number": 70, "title": "[BUG] latencia_alta em account-service", "url": "y"}]'
+
+    with patch("agent_preditivo.registration_agent.subprocess.run", return_value=fake_result):
+        found = find_open_github_issue("bug", "erro_alto em transaction-service")
+
+    assert found is None
+
+
+def test_find_open_github_issue_retorna_none_e_loga_aviso_quando_gh_falha(caplog) -> None:
+    """Falha ao consultar o GitHub (rede, auth, CLI ausente) e fail-open -
+    nao trava o ciclo do agente, so loga aviso (issue #77)."""
+    with (
+        caplog.at_level(logging.WARNING, logger="agent_preditivo.registration_agent"),
+        patch(
+            "agent_preditivo.registration_agent.subprocess.run",
+            side_effect=subprocess.CalledProcessError(1, ["gh"]),
+        ),
+    ):
+        found = find_open_github_issue("bug", "erro_alto em transaction-service")
+
+    assert found is None
+    assert any("Falha ao consultar issues abertas" in record.message for record in caplog.records)
+
+
 def test_register_opportunity_cria_issue_e_notifica_quando_gap(specs_dir) -> None:
     finding = OpportunityFinding(
         scenario_name="cenario_x", veredito="GAP", racional="viola regra Y", observed_behavior="Z", rule_chunks=[]
@@ -572,6 +646,7 @@ def test_register_opportunity_cria_issue_e_notifica_quando_gap(specs_dir) -> Non
 
     with (
         patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch("agent_preditivo.registration_agent.find_open_github_issue", return_value=None),
         patch(
             "agent_preditivo.registration_agent.create_issue",
             return_value=(99, "https://github.com/x/y/issues/99"),
@@ -602,6 +677,7 @@ def test_register_opportunity_commita_e_empurra_spec_antes_de_criar_issue(specs_
 
     with (
         patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch("agent_preditivo.registration_agent.find_open_github_issue", return_value=None),
         patch(
             "agent_preditivo.registration_agent.create_issue",
             side_effect=lambda *a, **k: chamadas.append("create_issue") or (99, "https://github.com/x/y/issues/99"),
@@ -648,6 +724,76 @@ def test_register_opportunity_nao_cria_issue_quando_sem_gap() -> None:
 
     assert result is None
     mock_create.assert_not_called()
+
+
+def test_register_opportunity_nao_duplica_quando_issue_equivalente_ja_aberta_no_github(specs_dir) -> None:
+    """Issue #77, requisito 3: reproduz o caso real #63/#68 - mesmo cenario
+    ('onboarding_get_inexistente') gerando issue e spec de negocio
+    duplicadas em execucoes diferentes do agente de oportunidade, porque
+    flagged_signals (Postgres efemero) nao sobrevive entre ambientes. Com a
+    checagem no GitHub, a segunda execucao nao deve criar issue NEM spec
+    nova (a spec so e escrita depois da checagem, ver format_opportunity_issue)."""
+    finding = OpportunityFinding(
+        scenario_name="onboarding_get_inexistente",
+        veredito="GAP",
+        racional="404 com ONBOARDING_NOT_FOUND confirmado de novo",
+        observed_behavior="GET /v1/onboarding/{id inexistente} retornou 404",
+        rule_chunks=[],
+    )
+
+    with (
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.find_open_github_issue",
+            return_value={
+                "number": 63,
+                "title": "[FASE 3] Oportunidade: onboarding_get_inexistente",
+                "url": "x",
+            },
+        ),
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal") as mock_register,
+        patch("agent_preditivo.registration_agent._comment_duplicate_occurrence") as mock_comment,
+        patch("agent_preditivo.registration_agent.create_issue") as mock_create,
+        patch("agent_preditivo.registration_agent._commit_and_push_spec") as mock_commit,
+    ):
+        result = register_opportunity(finding, scenario_path=None)
+
+    assert result is None
+    mock_create.assert_not_called()
+    mock_commit.assert_not_called()  # nenhuma spec nova commitada - evita o caso real 25/26
+    assert list(specs_dir.glob("*.md")) == []  # nenhuma spec nova escrita em disco
+    mock_register.assert_called_once_with("onboarding_get_inexistente", "oportunidade", issue_number=63)
+    mock_comment.assert_called_once()
+    assert mock_comment.call_args.args[0] == 63
+
+
+def test_register_opportunity_cria_issue_quando_github_nao_tem_equivalente(specs_dir) -> None:
+    """Sinal genuinamente novo (sem equivalente nem no banco local nem no
+    GitHub) continua gerando issue normalmente (issue #77, requisito 4)."""
+    finding = OpportunityFinding(
+        scenario_name="cenario_inedito", veredito="GAP", racional="viola regra Z", observed_behavior="W", rule_chunks=[]
+    )
+
+    with (
+        patch("agent_preditivo.registration_agent.agent_ops_db.find_open_signal", return_value=None),
+        patch("agent_preditivo.registration_agent.find_open_github_issue", return_value=None),
+        patch(
+            "agent_preditivo.registration_agent.create_issue",
+            return_value=(101, "https://github.com/x/y/issues/101"),
+        ) as mock_create,
+        patch("agent_preditivo.registration_agent.agent_ops_db.register_signal"),
+        patch(
+            "agent_preditivo.registration_agent.chat",
+            return_value="RESUMO: r\nCONTRATO_AFETADO: c\nSPECS_TECNICAS: nenhuma\nCRITERIO_ACEITE: - item 1\n- item 2",
+        ),
+        patch("agent_preditivo.registration_agent.notify_issue_created"),
+        patch("agent_preditivo.registration_agent._commit_and_push_spec") as mock_commit,
+    ):
+        result = register_opportunity(finding, scenario_path=None)
+
+    assert result == 101
+    mock_create.assert_called_once()
+    mock_commit.assert_called_once()
 
 
 def test_register_bug_loga_info_quando_dedup(caplog) -> None:

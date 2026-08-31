@@ -9,8 +9,19 @@ campos de risco em codigo (nao pelo LLM - mesma filosofia de nao delegar
 decisao estruturada ao modelo usada no resto do projeto), cria a issue via
 `gh issue create` e registra em `flagged_signals`
 (specs/business/13-agente-preditivo-registro.md).
-"""
 
+Deduplicacao em duas camadas (issue #77): `flagged_signals` (agent_ops_db)
+e a checagem rapida, mas vive num Postgres efemero - recriado a cada
+ambiente de teste (docker-compose.test.yml sobe um banco vazio por janela,
+ver docs/relatorio-janela-fase2b.md secoes 1/4). Um sinal sinalizado num
+dia/ambiente nao sobrevive para o proximo, entao a checagem local sozinha
+deixa passar duplicata entre janelas (caso real: issue #63, aberta num dia,
+nunca apareceu em `flagged_signals` no dia seguinte - o agente criou a
+duplicata #68). `find_open_github_issue` cobre esse buraco consultando o
+GitHub diretamente, fonte de verdade que sobrevive a qualquer reset de
+ambiente."""
+
+import json
 import logging
 import re
 import subprocess
@@ -379,6 +390,81 @@ def format_opportunity_issue(finding: OpportunityFinding, scenario_path: Path | 
     return title, body, spec_path
 
 
+def find_open_github_issue(label: str, match_substring: str) -> dict | None:
+    """Verifica se ja existe uma issue ABERTA no GitHub cujo titulo contenha
+    `match_substring` (case-insensitive), entre as issues com `label` dado -
+    checagem independente do `agent_ops.flagged_signals` (que e por-ambiente,
+    ver docstring do modulo), usada como segunda camada de dedup antes de
+    criar uma issue nova (issue #77).
+
+    Criterio de correspondencia escolhido: substring do "identificador" do
+    sinal no titulo. Os titulos sao gerados deterministicamente por este
+    mesmo modulo - `f"[BUG] {signal_type} em {service}"` (mesmo tipo de sinal
+    + mesmo servico alvo) e `f"[FASE 3] Oportunidade: {scenario_name}"`
+    (mesmo cenario) - entao o identificador usado para detectar e o mesmo
+    usado para gerar, tornando o match confiavel para issues criadas por
+    este agente. Nao usa hash/similaridade de conteudo: o titulo curto e
+    deterministico ja e um identificador estavel e mais barato de checar do
+    que comparar o corpo inteiro.
+
+    Limitacoes documentadas:
+    - Se o titulo de uma issue existente for editado manualmente a ponto de
+      remover o identificador (ex.: humano reescreve o titulo na triagem), o
+      match falha e uma duplicata pode ser criada - nao ha reconciliacao
+      retroativa.
+    - So compara contra issues com o `label` certo (nao cruza bug <->
+      business-story), o que e o comportamento pretendido (sao categorias
+      diferentes de sinal).
+    - Falha ao chamar `gh` (rede, autenticacao, CLI ausente) e tratada como
+      "nao encontrado" (fail-open, so loga aviso) para nao travar o ciclo de
+      polling por uma falha transitoria de API - mesma filosofia de
+      `run_cycle` (nao derrubar o daemon por erro pontual). Isso significa
+      que, numa falha da API do GitHub, uma duplicata pode escapar; aceito
+      porque o agente roda em polling continuo e a proxima consulta bem
+      sucedida volta a pegar o estado real.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", "issue", "list", "--state", "open", "--label", label, "--json", "number,title,url", "--limit", "200"],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=_REPO_ROOT,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        logger.warning(
+            "Falha ao consultar issues abertas no GitHub para dedup - seguindo sem esse check.",
+            extra={"context": {"label": label, "match_substring": match_substring, "erro": str(exc)}},
+        )
+        return None
+
+    match_lower = match_substring.lower()
+    for issue in json.loads(result.stdout):
+        if match_lower in issue["title"].lower():
+            return issue
+    return None
+
+
+def _comment_duplicate_occurrence(issue_number: int, body: str) -> None:
+    """Registra a nova ocorrencia do sinal como comentario na issue ja
+    aberta, em vez de abrir duplicata (issue #77, requisito 2). Melhor
+    esforco: uma falha aqui e logada, mas nao impede o ciclo de seguir (o
+    sinal ainda e deduplicado - so o comentario informativo se perde)."""
+    try:
+        subprocess.run(
+            ["gh", "issue", "comment", str(issue_number), "--body", body],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=_REPO_ROOT,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        logger.warning(
+            "Falha ao comentar nova ocorrência do sinal na issue existente.",
+            extra={"context": {"issue_number": issue_number, "erro": str(exc)}},
+        )
+
+
 def create_issue(title: str, body: str, label: str, extra_labels: list[str] | None = None) -> tuple[int, str]:
     args = ["gh", "issue", "create", "--title", title, "--body", body, "--label", label]
     for extra_label in extra_labels or []:
@@ -409,6 +495,30 @@ def register_bug(signal: BugSignal) -> int | None:
             },
         )
         return None  # já sinalizado e em aberto - dedup, nao repete a acao
+
+    existing_gh = find_open_github_issue("bug", f"{signal.signal_type} em {signal.service}")
+    if existing_gh is not None:
+        # flagged_signals nao tinha o sinal (banco efemero, ver docstring do
+        # modulo), mas o GitHub confirma issue equivalente ja aberta -
+        # comenta a nova ocorrencia em vez de duplicar, e sincroniza o banco
+        # local para os proximos ciclos desta mesma janela (issue #77).
+        agent_ops_db.register_signal(signal.signal_type, signal.service, issue_number=existing_gh["number"])
+        _comment_duplicate_occurrence(
+            existing_gh["number"],
+            f"Sinal `{signal.signal_type}` em `{signal.service}` observado novamente pelo agent-preditivo "
+            f"(nova ocorrência do mesmo sinal, issue não duplicada). Detalhe: {signal.detail}",
+        )
+        logger.info(
+            "Issue equivalente já aberta no GitHub - issue não duplicada (dedup por título).",
+            extra={
+                "context": {
+                    "signal_type": signal.signal_type,
+                    "service": signal.service,
+                    "issue_number": existing_gh["number"],
+                }
+            },
+        )
+        return None
 
     title, body = format_bug_issue(signal)
     extra_labels = [CHAOS_ORIGIN_LABEL] if signal.chaos_ativo else None
@@ -442,6 +552,26 @@ def register_opportunity(finding: OpportunityFinding, scenario_path: Path | None
         logger.info(
             "Gap já sinalizado e em aberto - issue não reaberta (dedup).",
             extra={"context": {"scenario": finding.scenario_name, "issue_number": existing.get("issue_number")}},
+        )
+        return None
+
+    existing_gh = find_open_github_issue("business-story", finding.scenario_name)
+    if existing_gh is not None:
+        # Checagem acontece ANTES de format_opportunity_issue (que cria e
+        # commita a spec de negocio em specs/business/) - achado real de
+        # duas execucoes diferentes do agente de oportunidade gerando specs
+        # quase identicas (25/26) para o mesmo cenario, alem da duplicata de
+        # issue (#63/#68): ao interromper aqui, nem spec nem issue nova sao
+        # criadas para um cenario ja coberto (issue #77, requisito 3).
+        agent_ops_db.register_signal(finding.scenario_name, "oportunidade", issue_number=existing_gh["number"])
+        _comment_duplicate_occurrence(
+            existing_gh["number"],
+            f"Gap do cenário `{finding.scenario_name}` reencontrado pelo agent-preditivo "
+            f"(nova ocorrência, issue não duplicada). Racional desta execução: {finding.racional}",
+        )
+        logger.info(
+            "Issue equivalente já aberta no GitHub - issue não duplicada (dedup por título).",
+            extra={"context": {"scenario": finding.scenario_name, "issue_number": existing_gh["number"]}},
         )
         return None
 
