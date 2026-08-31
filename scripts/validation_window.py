@@ -333,6 +333,32 @@ def start_traffic_generator(
     )
 
 
+def resolve_scenario_path(scenario_arg: Path) -> Path:
+    """Resolve --scenario contra a raiz do repo (nunca contra o cwd do
+    processo atual) - achado real da issue #75: run_chaos_cycle invoca
+    orchestrator.py com cwd=CHAOS_ORCHESTRATOR_DIR (o subprocesso ja roda de
+    DENTRO de chaos-orchestrator/), entao um caminho relativo tipo
+    'chaos-orchestrator/scenarios/x.yaml' (copiado do proprio repo, o jeito
+    mais natural de passar o argumento) resolvia como
+    'chaos-orchestrator/chaos-orchestrator/scenarios/x.yaml' - inexistente em
+    todos os 40 ciclos da janela de 2h (docs/relatorio-janela-fase2b.md,
+    secao "Aviso critico"), sem nenhum caos injetado.
+
+    Um caminho absoluto (inclusive o DEFAULT_SCENARIO do proprio script)
+    passa direto, sem essa reinterpretacao."""
+    if scenario_arg.is_absolute():
+        resolved = scenario_arg
+    else:
+        resolved = (REPO_ROOT / scenario_arg).resolve()
+    if not resolved.is_file():
+        raise SystemExit(
+            f"Cenario de caos nao encontrado: {resolved} (--scenario={scenario_arg}). "
+            f"Caminhos relativos sao resolvidos a partir da raiz do repo ({REPO_ROOT}), "
+            "nao do cwd do subprocesso do orchestrator.py."
+        )
+    return resolved
+
+
 def run_chaos_cycle(scenario_path: Path, log_path: Path, token: str) -> int:
     python = _venv_python(CHAOS_ORCHESTRATOR_DIR)
     env = {**os.environ, "CHAOS_INTERNAL_TOKEN": token, "PYTHONUNBUFFERED": "1"}
@@ -561,6 +587,8 @@ def main(argv: list[str] | None = None) -> None:
     token = os.environ.get("CHAOS_INTERNAL_TOKEN", "")
     if not token:
         raise SystemExit("CHAOS_INTERNAL_TOKEN nao definida no ambiente - necessaria para o chaos-orchestrator.")
+
+    args.scenario = resolve_scenario_path(args.scenario)
 
     settle_window_seconds = args.settle_window_seconds
     if settle_window_seconds is None:

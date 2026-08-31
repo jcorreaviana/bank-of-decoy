@@ -10,7 +10,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from validation_window import _read_interval_from_env_file, compute_pending_state
+import pytest
+
+import validation_window as vw
+from validation_window import _read_interval_from_env_file, compute_pending_state, resolve_scenario_path
 
 
 def test_sem_pendencia_quando_nada_novo_e_nada_atribuido():
@@ -66,3 +69,45 @@ def test_read_interval_from_env_file_valor_invalido_usa_default(tmp_path):
     env_path = tmp_path / ".env"
     env_path.write_text("AGENT_LOCAL_INTERVAL_SECONDS=nao-e-numero\n", encoding="utf-8")
     assert _read_interval_from_env_file(env_path, "AGENT_LOCAL_INTERVAL_SECONDS", 300.0) == 300.0
+
+
+# --------------------------------------------------------------------------
+# resolve_scenario_path (issue #75 - --scenario relativo resolvia contra o
+# cwd errado, porque run_chaos_cycle invoca orchestrator.py com
+# cwd=CHAOS_ORCHESTRATOR_DIR)
+# --------------------------------------------------------------------------
+
+
+def test_resolve_scenario_path_relativo_a_raiz_do_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(vw, "REPO_ROOT", tmp_path)
+    scenario_dir = tmp_path / "chaos-orchestrator" / "scenarios"
+    scenario_dir.mkdir(parents=True)
+    scenario_file = scenario_dir / "account_and_queue_cascade.yaml"
+    scenario_file.write_text("nome: exemplo\n", encoding="utf-8")
+
+    resolved = resolve_scenario_path(Path("chaos-orchestrator/scenarios/account_and_queue_cascade.yaml"))
+
+    assert resolved == scenario_file.resolve()
+
+
+def test_resolve_scenario_path_absoluto_continua_funcionando(tmp_path, monkeypatch):
+    # REPO_ROOT aponta pra outro lugar de proposito - um caminho absoluto
+    # nunca deve ser reinterpretado contra ele.
+    monkeypatch.setattr(vw, "REPO_ROOT", tmp_path / "nao-deveria-ser-usado")
+    scenario_file = tmp_path / "cenario.yaml"
+    scenario_file.write_text("nome: exemplo\n", encoding="utf-8")
+
+    resolved = resolve_scenario_path(scenario_file)
+
+    assert resolved == scenario_file
+
+
+def test_resolve_scenario_path_inexistente_falha_rapido_com_mensagem_clara(tmp_path, monkeypatch):
+    monkeypatch.setattr(vw, "REPO_ROOT", tmp_path)
+    caminho_relativo = Path("chaos-orchestrator/scenarios/nao-existe.yaml")
+
+    with pytest.raises(SystemExit) as exc_info:
+        resolve_scenario_path(caminho_relativo)
+
+    mensagem = str(exc_info.value)
+    assert str((tmp_path / caminho_relativo).resolve()) in mensagem
