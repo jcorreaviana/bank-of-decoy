@@ -9,5 +9,6 @@ htmlcov/
 *.egg-info/
 scripts/*.log
 scripts/validation_window_logs/
+daemon.log
 rag_index/
 agent-local/workspace/
