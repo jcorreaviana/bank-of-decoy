@@ -45,8 +45,47 @@ def upgrade() -> None:
     op.drop_index(op.f('ix_onboardings_cpf_unique_not_deleted'), table_name='onboardings', postgresql_where='(deleted_at IS NULL)')
     op.create_index('ix_onboardings_cpf_hash_unique_not_deleted', 'onboardings', ['cpf_hash'], unique=True, postgresql_where=sa.text('deleted_at IS NULL'))
 
+    # `check_documento_reciclado` e `check_padrao_mula`
+    # (app/services/onboarding_risk.py) rodam em todo POST /v1/onboarding e
+    # filtram documento_numero / ip_origem / dispositivo_id + created_at +
+    # deleted_at IS NULL sem indice - com a tabela crescendo (populador de
+    # volume/dataset de fraude), viram sequential scan e explicam a
+    # latencia p95 fora do padrao histórico (issue #59). Indices parciais
+    # (deleted_at IS NULL, unica leitura relevante) cobrem os dois casos;
+    # o de documento_numero tambem restringe por status='aprovado', unico
+    # valor que `check_documento_reciclado` consulta.
+    op.create_index(
+        'ix_onboardings_documento_numero_aprovado_created_at',
+        'onboardings',
+        ['documento_numero', 'created_at'],
+        unique=False,
+        postgresql_where=sa.text("status = 'aprovado' AND deleted_at IS NULL"),
+    )
+    op.create_index(
+        'ix_onboardings_ip_origem_created_at',
+        'onboardings',
+        ['ip_origem', 'created_at'],
+        unique=False,
+        postgresql_where=sa.text('deleted_at IS NULL'),
+    )
+    op.create_index(
+        'ix_onboardings_dispositivo_id_created_at',
+        'onboardings',
+        ['dispositivo_id', 'created_at'],
+        unique=False,
+        postgresql_where=sa.text('deleted_at IS NULL'),
+    )
+
 
 def downgrade() -> None:
+    op.drop_index('ix_onboardings_dispositivo_id_created_at', table_name='onboardings', postgresql_where=sa.text('deleted_at IS NULL'))
+    op.drop_index('ix_onboardings_ip_origem_created_at', table_name='onboardings', postgresql_where=sa.text('deleted_at IS NULL'))
+    op.drop_index(
+        'ix_onboardings_documento_numero_aprovado_created_at',
+        table_name='onboardings',
+        postgresql_where=sa.text("status = 'aprovado' AND deleted_at IS NULL"),
+    )
+
     connection = op.get_bind()
 
     op.drop_index('ix_onboardings_cpf_hash_unique_not_deleted', table_name='onboardings', postgresql_where=sa.text('deleted_at IS NULL'))

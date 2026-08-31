@@ -22,6 +22,28 @@ class Onboarding(Base):
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
         ),
+        # Suportam as consultas de historico em app/services/onboarding_risk.py
+        # (check_documento_reciclado, check_padrao_mula) - sem estes indices
+        # viram sequential scan a medida que a tabela cresce, causando a
+        # latencia p95 fora do padrao investigada na issue #59.
+        Index(
+            "ix_onboardings_documento_numero_aprovado_created_at",
+            "documento_numero",
+            "created_at",
+            postgresql_where=text("status = 'aprovado' AND deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_onboardings_ip_origem_created_at",
+            "ip_origem",
+            "created_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index(
+            "ix_onboardings_dispositivo_id_created_at",
+            "dispositivo_id",
+            "created_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
