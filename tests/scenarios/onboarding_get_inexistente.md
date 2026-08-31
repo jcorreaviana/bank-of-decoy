@@ -4,10 +4,10 @@
 GAP
 
 ## Racional
-O trecho de spec não menciona explicitamente o comportamento esperado para o caso de um onboarding inexistente, e o comportamento observado (500, error_code=INTERNAL_ERROR) não é mencionado como um erro esperado em nenhum dos casos de erro listados no spec.
+O trecho de spec especifica claramente o comportamento esperado para o caso de um onboarding inexistente, que é retornar 404 com error_code "ONBOARDING_NOT_FOUND". O comportamento observado ao executar o cenario 'onboarding_get_inexistente' também retorna 404 com error_code "ONBOARDING_NOT_FOUND", o que coincide com o comportamento esperado.
 
 ## Comportamento observado
-GET /v1/onboarding/{id inexistente} retornou 500, error_code=INTERNAL_ERROR
+GET /v1/onboarding/{id inexistente} retornou 404, error_code=ONBOARDING_NOT_FOUND
 
 ## Passos de reprodução
-1. GET /v1/onboarding/{id inexistente} retornou 500, error_code=INTERNAL_ERROR
+1. GET /v1/onboarding/{id inexistente} retornou 404, error_code=ONBOARDING_NOT_FOUND
