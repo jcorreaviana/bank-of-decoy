@@ -67,3 +67,33 @@ def test_publish_event_does_not_delay_when_disabled(monkeypatch):
         kafka.publish_event("onboarding.aprovado", {"event_id": "e1"})
 
     assert sleep_calls == []
+
+
+def test_publish_events_produces_todas_as_mensagens_com_um_unico_flush(monkeypatch):
+    """Issue #69: dois eventos do mesmo fato de negocio (ex. onboarding
+    reprovado, resultado + fila de revisao) nao podem gerar dois flushes
+    sequenciais - cada flush bloqueia ate a confirmacao de entrega, entao
+    dois flushes em serie dobravam o tempo do request nesse caminho."""
+    producer = MagicMock()
+    producer.flush.return_value = 0
+
+    with patch("app.core.kafka.get_producer", return_value=producer):
+        kafka.publish_events(
+            [
+                ("onboarding.reprovado_qualidade", {"event_id": "e1"}, "chave-1"),
+                ("onboarding.revisao_qualidade", {"event_id": "e1"}, "chave-1"),
+            ]
+        )
+
+    assert producer.produce.call_count == 2
+    producer.flush.assert_called_once()
+
+
+def test_publish_events_sem_eventos_nao_produz_nem_flusha():
+    producer = MagicMock()
+
+    with patch("app.core.kafka.get_producer", return_value=producer):
+        kafka.publish_events([])
+
+    producer.produce.assert_not_called()
+    producer.flush.assert_not_called()

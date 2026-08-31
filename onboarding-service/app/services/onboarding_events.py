@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from app.core.kafka import publish_event
+from app.core.kafka import publish_events
 from app.core.logging import get_trace_id
 from app.models import Onboarding
 from app.repositories import onboarding_repository
@@ -83,8 +83,13 @@ def publish_onboarding_classified(db: Session, onboarding: Onboarding) -> None:
     payload = _build_payload(db, onboarding)
     envelope = _build_envelope(topico_resultado, onboarding, payload)
 
-    publish_event(topico_resultado, envelope, key=str(onboarding.id))
+    key = str(onboarding.id)
+    eventos: list[tuple[str, dict, str | None]] = [(topico_resultado, envelope, key)]
 
     topico_revisao = _TOPICOS_REVISAO.get(onboarding.status)
     if topico_revisao is not None:
-        publish_event(topico_revisao, envelope, key=str(onboarding.id))
+        eventos.append((topico_revisao, envelope, key))
+
+    # Um unico flush para todos os eventos deste fato de negocio (issue #69)
+    # - ver docstring de app/core/kafka.publish_events.
+    publish_events(eventos)

@@ -41,40 +41,64 @@ def _delivery_callback(err, msg) -> None:
 
 
 def publish_event(topic: str, envelope: dict, key: str | None = None) -> None:
-    """Publica `envelope` (ja serializavel) em `topic`. Bloqueia ate o
-    delivery report chegar (ou `_FLUSH_TIMEOUT_SECONDS` esgotar) - falha ou
-    timeout ficam visiveis via log ERROR, nunca descartados em silencio.
+    """Publica um unico `envelope` (ja serializavel) em `topic`. Atalho de
+    `publish_events` para o caso de um evento so - ver ali para o
+    comportamento de bloqueio/flush."""
+    publish_events([(topic, envelope, key)])
+
+
+def publish_events(events: list[tuple[str, dict, str | None]]) -> None:
+    """Publica um ou mais eventos (mesmo fato de negocio ou nao) com um
+    UNICO flush ao final. Bloqueia ate os delivery reports chegarem (ou
+    `_FLUSH_TIMEOUT_SECONDS` esgotar) - falha ou timeout ficam visiveis via
+    log ERROR, nunca descartados em silencio.
+
+    Issue #69 (latencia_alta no onboarding-service): `publish_onboarding_classified`
+    publicava o mesmo fato de negocio em dois topicos (resultado + fila de
+    revisao) chamando produce+flush duas vezes em sequencia - cada flush
+    bloqueia ate a confirmacao de entrega, entao dois flushes sequenciais no
+    mesmo request dobravam o tempo de round-trip com o broker no caminho de
+    reprovacao (qualidade/fraude). Produzir as N mensagens primeiro e so
+    entao flushar uma vez faz o broker confirmar as entregas em paralelo,
+    nao em serie.
 
     Chaos `kafka_delay` (issue #52, specs/business/24-camada-caos-avancada.md):
-    atraso fixo aplicado aqui, antes do produce - simula latencia da
+    atraso fixo aplicado antes de cada produce - simula latencia da
     infraestrutura de mensageria, nao do servico em si."""
-    delay = maybe_kafka_publish_delay_seconds()
-    if delay:
-        time.sleep(delay)
-
-    producer = get_producer()
-    try:
-        producer.produce(
-            topic,
-            key=key.encode("utf-8") if key else None,
-            value=json.dumps(envelope).encode("utf-8"),
-            callback=_delivery_callback,
-        )
-        pending = producer.flush(timeout=_FLUSH_TIMEOUT_SECONDS)
-    except KafkaException as exc:
-        logger.error(
-            "Excecao ao publicar evento Kafka.",
-            extra={"context": {"topic": topic, "event_id": envelope.get("event_id"), "error": str(exc)}},
-        )
+    if not events:
         return
 
+    producer = get_producer()
+    produced_any = False
+    for topic, envelope, key in events:
+        delay = maybe_kafka_publish_delay_seconds()
+        if delay:
+            time.sleep(delay)
+
+        try:
+            producer.produce(
+                topic,
+                key=key.encode("utf-8") if key else None,
+                value=json.dumps(envelope).encode("utf-8"),
+                callback=_delivery_callback,
+            )
+            produced_any = True
+        except KafkaException as exc:
+            logger.error(
+                "Excecao ao publicar evento Kafka.",
+                extra={"context": {"topic": topic, "event_id": envelope.get("event_id"), "error": str(exc)}},
+            )
+
+    if not produced_any:
+        return
+
+    pending = producer.flush(timeout=_FLUSH_TIMEOUT_SECONDS)
     if pending > 0:
         logger.error(
             "Evento Kafka nao confirmado como entregue dentro do timeout.",
             extra={
                 "context": {
-                    "topic": topic,
-                    "event_id": envelope.get("event_id"),
+                    "topicos": [topic for topic, _envelope, _key in events],
                     "mensagens_pendentes": pending,
                 }
             },

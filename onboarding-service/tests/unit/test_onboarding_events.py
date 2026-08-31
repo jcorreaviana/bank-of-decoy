@@ -41,14 +41,15 @@ def test_publish_onboarding_classified_aprovado_publica_um_topico_com_cpf_cifrad
     onboarding = _onboarding(status="aprovado")
     db = _FakeDbCpf("ciphertext-fake")
 
-    with patch("app.services.onboarding_events.publish_event") as mock_publish:
+    with patch("app.services.onboarding_events.publish_events") as mock_publish:
         publish_onboarding_classified(db, onboarding)
 
-    assert mock_publish.call_count == 1
-    call = mock_publish.call_args
-    topic, envelope = call.args
+    mock_publish.assert_called_once()
+    (eventos,) = mock_publish.call_args.args
+    assert len(eventos) == 1
+    topic, envelope, key = eventos[0]
     assert topic == "onboarding.aprovado"
-    assert call.kwargs["key"] == str(onboarding.id)
+    assert key == str(onboarding.id)
     assert envelope["event_type"] == "onboarding.aprovado"
     assert uuid.UUID(envelope["event_id"])  # formato valido
     assert envelope["occurred_at"] == "2026-01-01T12:00:00.123Z"
@@ -62,21 +63,22 @@ def test_publish_onboarding_classified_aprovado_publica_um_topico_com_cpf_cifrad
     assert "telefone" not in envelope["payload"]
 
 
-def test_publish_onboarding_classified_reprovado_qualidade_publica_dois_topicos_mesmo_evento() -> None:
+def test_publish_onboarding_classified_reprovado_qualidade_publica_dois_topicos_mesmo_evento_num_unico_flush() -> None:
     onboarding = _onboarding(status="reprovado_qualidade", motivo_reprovacao="documento_formato_invalido")
     db = _FakeDbCpf(None)
 
-    with patch("app.services.onboarding_events.publish_event") as mock_publish:
+    with patch("app.services.onboarding_events.publish_events") as mock_publish:
         publish_onboarding_classified(db, onboarding)
 
-    assert mock_publish.call_count == 2
-    topicos = [call.args[0] for call in mock_publish.call_args_list]
+    mock_publish.assert_called_once()  # issue #69: um unico flush para os dois topicos
+    (eventos,) = mock_publish.call_args.args
+    topicos = [topic for topic, _envelope, _key in eventos]
     assert topicos == ["onboarding.reprovado_qualidade", "onboarding.revisao_qualidade"]
 
-    event_ids = {call.args[1]["event_id"] for call in mock_publish.call_args_list}
+    event_ids = {envelope["event_id"] for _topic, envelope, _key in eventos}
     assert len(event_ids) == 1  # mesmo fato de negocio, dois topicos
 
-    payload = mock_publish.call_args_list[0].args[1]["payload"]
+    payload = eventos[0][1]["payload"]
     assert payload["motivo_reprovacao"] == "documento_formato_invalido"
     assert "cpf" not in payload
 
@@ -85,10 +87,11 @@ def test_publish_onboarding_classified_reprovado_fraude_publica_fila_compliance(
     onboarding = _onboarding(status="reprovado_fraude", motivo_reprovacao="pep_detectado")
     db = _FakeDbCpf(None)
 
-    with patch("app.services.onboarding_events.publish_event") as mock_publish:
+    with patch("app.services.onboarding_events.publish_events") as mock_publish:
         publish_onboarding_classified(db, onboarding)
 
-    topicos = [call.args[0] for call in mock_publish.call_args_list]
+    (eventos,) = mock_publish.call_args.args
+    topicos = [topic for topic, _envelope, _key in eventos]
     assert topicos == ["onboarding.reprovado_fraude", "onboarding.revisao_compliance"]
 
 
@@ -96,7 +99,7 @@ def test_publish_onboarding_classified_em_analise_nao_publica_nada() -> None:
     onboarding = _onboarding(status="em_analise")
     db = _FakeDbCpf(None)
 
-    with patch("app.services.onboarding_events.publish_event") as mock_publish:
+    with patch("app.services.onboarding_events.publish_events") as mock_publish:
         publish_onboarding_classified(db, onboarding)
 
     mock_publish.assert_not_called()
