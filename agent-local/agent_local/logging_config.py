@@ -18,8 +18,18 @@ import sys
 import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 _trace_id_var: ContextVar[str] = ContextVar("trace_id", default="")
+
+# agent-local/daemon.log (irma do pacote agent_local/, nao dentro dele) -
+# caminho absoluto derivado do proprio arquivo para nao depender do cwd de
+# onde o operador inicia o daemon (issue #79: ate aqui "daemon.log" so
+# existia por convencao de redirecionar o stdout manualmente no terminal).
+_LOG_FILE = Path(__file__).resolve().parent.parent / "daemon.log"
+_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MiB por arquivo
+_LOG_BACKUP_COUNT = 5  # daemon.log + ate 5 arquivos antigos (~50 MiB retidos no total)
 
 
 def new_trace_id() -> str:
@@ -63,9 +73,21 @@ def configure_logging(service_name: str, log_level: str) -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter(service_name))
+    formatter = JsonFormatter(service_name)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+
+    # Rotacao por tamanho, nao por horario fixo: um ciclo de polling varia
+    # de segundos a dezenas de minutos (chamada ao SDK), entao um corte por
+    # horario (ex. meia-noite) seria arbitrario em relacao ao ciclo; por
+    # tamanho (10 MiB x 5 arquivos = ate ~50 MiB retidos) e previsivel
+    # independente de quanto tempo o daemon roda continuamente.
+    file_handler = RotatingFileHandler(
+        _LOG_FILE, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
 
     root = logging.getLogger()
-    root.handlers = [handler]
+    root.handlers = [stream_handler, file_handler]
     root.setLevel(log_level.upper())
