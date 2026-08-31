@@ -181,15 +181,13 @@ def _minimal_subprocess_env():
         os.environ.clear()
         os.environ.update(original)
 
+_ALLOWED_SHELL_PREFIXES = ("pytest", "alembic", "git add", "git commit", "git diff", "git status")
+_SHELL_TOOL_NAMES = ("Bash", "PowerShell")
+
 ALLOWED_TOOLS = [
     "Read",
     "Edit(**)",
-    "Bash(pytest *)",
-    "Bash(alembic *)",
-    "Bash(git add *)",
-    "Bash(git commit *)",
-    "Bash(git diff *)",
-    "Bash(git status *)",
+    *(f"{tool}({prefix} *)" for tool in _SHELL_TOOL_NAMES for prefix in _ALLOWED_SHELL_PREFIXES),
 ]
 """Documenta o escopo pretendido (issue #16) - mas, ao contrario do resto
 deste modulo, `"Edit(**)"` especificamente NAO E so metadado: e a protecao
@@ -203,9 +201,43 @@ vira uma negacao real para qualquer coisa fora, absoluta ou via `../`.
 Deliberadamente NAO e `"Edit"` sem escopo: essa forma (usada antes da #74)
 e um especificador "inteiro" que blinda (shadow) `can_use_tool` E
 pre-aprova qualquer caminho incondicionalmente - foi exatamente essa
-entrada que permitiu o vazamento observado nas issues #59/#69/#70."""
+entrada que permitiu o vazamento observado nas issues #59/#69/#70.
 
-_ALLOWED_BASH_PREFIXES = ("pytest", "alembic", "git add", "git commit", "git diff", "git status")
+## Issue #76 - "Bash" e "PowerShell" sao ferramentas DIFERENTES no CLI
+
+Achado real (nao suposicao - reproduzido com um espiao contra o SDK real,
+mesma metodologia da #74, ver `docs/escopo-arquitetura.md`): neste
+ambiente Windows, o CLI empacotado registra "PowerShell" como uma
+ferramenta de shell separada de "Bash" (ambas com o mesmo formato de
+entrada `{command, description}`, listadas lado a lado em
+`SystemMessage(subtype="init").data["tools"]`). Antes desta correcao,
+`ALLOWED_TOOLS` so tinha entradas `"Bash(...)"` - qualquer `git add`/
+`git commit` que o modelo decidisse rodar via `PowerShell` (preferencia
+plausivel neste SO, ja que o proprio CLI descreve o ambiente Windows como
+"Shell: PowerShell (primary); Bash tool also available") nao correspondia
+a nenhuma entrada de `allowed_tools`, caindo no comportamento padrao
+"ask" do motor de regras do CLI - que sob `permission_mode="dontAsk"` vira
+negacao imediata (mesma mecanica ja documentada acima para `Edit`: a
+decisao acontece inteiramente dentro do subprocess CLI, ANTES de
+`can_use_tool` ser sequer consultado - confirmado com o mesmo espiao, que
+nunca disparou nem para o `git status` que passou nem para o `git commit`
+negado). A mensagem de negacao ("Permission to use PowerShell has been
+denied because Claude Code is running in don't ask mode.") e gerada pelo
+proprio CLI (funcao interna do bundle, nao deste modulo) - por isso nunca
+bateu com o texto customizado de `_deny_out_of_scope_tools` abaixo, o
+sintoma que a issue #76 reportou.
+
+Testado com o mesmo espiao: sem a entrada
+`"PowerShell(git commit *)"`, `git add file.txt; git commit -m "..."` via
+PowerShell foi negado com a mensagem exata acima e o callback nunca
+rodou; com a entrada presente (formato abaixo), o commit foi aprovado e
+concluido com sucesso, tambem sem passar pelo callback - mesmo padrao de
+"protecao real fica na entrada escopada do ALLOWED_TOOLS" ja estabelecido
+para `Edit(**)`. `git push`/`gh pr`/`gh issue` via PowerShell continuam
+fora de `ALLOWED_TOOLS` (nenhuma entrada `PowerShell(git push *)` etc
+existe) - confirmado que a negacao para esses continua ocorrendo, mesmo
+mecanismo, escopo preservado."""
+
 _FORBIDDEN_BASH_SUBSTRINGS = ("git push", "gh pr", "gh issue")
 
 
@@ -263,16 +295,16 @@ def _make_deny_out_of_scope_tools(cwd: str):
     allowed_root = Path(cwd).resolve()
 
     async def _deny_out_of_scope_tools(tool_name: str, input_data: dict, _context) -> PermissionResultAllow | PermissionResultDeny:
-        if tool_name == "Bash":
+        if tool_name in _SHELL_TOOL_NAMES:
             command = input_data.get("command", "")
             if any(forbidden in command for forbidden in _FORBIDDEN_BASH_SUBSTRINGS):
                 return PermissionResultDeny(
                     message="git push/gh pr/gh issue sao responsabilidade exclusiva do wrapper Python, apos o gate de risco - nunca do modelo.",
                     interrupt=False,
                 )
-            if not command.strip().startswith(_ALLOWED_BASH_PREFIXES):
+            if not command.strip().startswith(_ALLOWED_SHELL_PREFIXES):
                 return PermissionResultDeny(
-                    message=f"Comando Bash fora do escopo desta execucao (permitido: {', '.join(_ALLOWED_BASH_PREFIXES)}).",
+                    message=f"Comando {tool_name} fora do escopo desta execucao (permitido: {', '.join(_ALLOWED_SHELL_PREFIXES)}).",
                     interrupt=False,
                 )
             return PermissionResultAllow(updated_input=input_data)
@@ -298,7 +330,7 @@ def _make_deny_out_of_scope_tools(cwd: str):
             return PermissionResultAllow(updated_input=input_data)
 
         return PermissionResultDeny(
-            message=f"Ferramenta '{tool_name}' fora do escopo desta execucao (permitido: Read, Edit, Bash com padroes de teste/git local).",
+            message=f"Ferramenta '{tool_name}' fora do escopo desta execucao (permitido: Read, Edit, Bash/PowerShell com padroes de teste/git local).",
             interrupt=False,
         )
 

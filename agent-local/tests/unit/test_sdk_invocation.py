@@ -27,6 +27,11 @@ def test_allowed_tools_nunca_inclui_push_ou_pr() -> None:
 
 
 def test_allowed_tools_escopo_exato_da_issue() -> None:
+    """Issue #76: "Bash" e "PowerShell" sao ferramentas distintas no CLI
+    empacotado (confirmado contra o SDK real, ver docstring de
+    `sdk_invocation.py`) - cada padrao de git/teste precisa de uma entrada
+    espelhada para cada uma, senao o modelo cai em negacao pelo motor de
+    regras nativo do CLI ao escolher a ferramenta que nao tem entrada."""
     assert ALLOWED_TOOLS == [
         "Read",
         "Edit(**)",
@@ -36,6 +41,12 @@ def test_allowed_tools_escopo_exato_da_issue() -> None:
         "Bash(git commit *)",
         "Bash(git diff *)",
         "Bash(git status *)",
+        "PowerShell(pytest *)",
+        "PowerShell(alembic *)",
+        "PowerShell(git add *)",
+        "PowerShell(git commit *)",
+        "PowerShell(git diff *)",
+        "PowerShell(git status *)",
     ]
 
 
@@ -74,29 +85,42 @@ def _call_deny(tool_name: str, input_data: dict, cwd: str = "."):
     return anyio.run(deny, tool_name, input_data, None)
 
 
-def test_deny_bloqueia_git_push() -> None:
-    result = _call_deny("Bash", {"command": "git push origin main"})
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
+def test_deny_bloqueia_git_push(tool_name: str) -> None:
+    result = _call_deny(tool_name, {"command": "git push origin main"})
     assert type(result).__name__ == "PermissionResultDeny"
 
 
-def test_deny_bloqueia_gh_pr() -> None:
-    result = _call_deny("Bash", {"command": "gh pr create --title x"})
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
+def test_deny_bloqueia_gh_pr(tool_name: str) -> None:
+    result = _call_deny(tool_name, {"command": "gh pr create --title x"})
     assert type(result).__name__ == "PermissionResultDeny"
 
 
-def test_deny_bloqueia_gh_issue() -> None:
-    result = _call_deny("Bash", {"command": "gh issue close 1"})
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
+def test_deny_bloqueia_gh_issue(tool_name: str) -> None:
+    result = _call_deny(tool_name, {"command": "gh issue close 1"})
     assert type(result).__name__ == "PermissionResultDeny"
 
 
-def test_deny_bloqueia_bash_fora_dos_padroes_permitidos() -> None:
-    result = _call_deny("Bash", {"command": "rm -rf /"})
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
+def test_deny_bloqueia_comando_fora_dos_padroes_permitidos(tool_name: str) -> None:
+    result = _call_deny(tool_name, {"command": "rm -rf /"})
     assert type(result).__name__ == "PermissionResultDeny"
 
 
-def test_deny_permite_bash_com_padrao_permitido() -> None:
+@pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
+def test_deny_permite_comando_com_padrao_permitido(tool_name: str) -> None:
+    """Issue #76: o callback (`can_use_tool`) e defesa-em-profundidade - a
+    protecao real sob `permission_mode="dontAsk"` e a entrada escopada em
+    `ALLOWED_TOOLS`, resolvida pelo motor de regras do proprio CLI antes
+    deste callback ser consultado (mesmo padrao ja confirmado para
+    `Edit(**)` na #74). Este teste cobre a logica do callback em si -
+    a cobertura de que a entrada do `ALLOWED_TOOLS` de fato evita a
+    negacao real do CLI para `PowerShell` esta no teste de integracao
+    `tests/integration/test_powershell_local_commit.py`."""
     for command in ["pytest --cov", "alembic upgrade head", "git add .", "git commit -m x", "git diff --stat", "git status"]:
-        result = _call_deny("Bash", {"command": command})
+        result = _call_deny(tool_name, {"command": command})
         assert type(result).__name__ == "PermissionResultAllow", f"deveria permitir: {command}"
 
 
@@ -186,7 +210,7 @@ def test_invoke_sdk_usa_cwd_da_chamada_para_o_callback_de_permissao(tmp_path: Pa
     assert type(result).__name__ == "PermissionResultDeny"
 
 
-def test_deny_bloqueia_ferramentas_nao_read_edit_bash() -> None:
+def test_deny_bloqueia_ferramentas_fora_do_escopo() -> None:
     for tool_name in ["Write", "Glob", "Grep", "WebFetch", "WebSearch"]:
         result = _call_deny(tool_name, {})
         assert type(result).__name__ == "PermissionResultDeny", f"deveria bloquear: {tool_name}"
