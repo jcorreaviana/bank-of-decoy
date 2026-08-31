@@ -17,11 +17,31 @@ _risk_decisions: Table | None = None
 
 
 def _get_engine() -> Engine:
+    """So publica nos globais `_engine`/`_risk_decisions` depois que
+    `create_engine` + `reflect` tiverem os DOIS sucesso completo (causa raiz
+    real da issue #61, 1a falha genuina da janela de validacao Fase 2b -
+    `docs/relatorio-janela-fase2b.md`, secao 10): a versao anterior
+    atribuia `_engine` ANTES do `reflect()`. Se o `reflect()` do PRIMEIRO
+    `record_risk_decision()` da vida do processo falhasse por qualquer
+    motivo transitorio (o daemon roda em loop continuo, nunca reinicia
+    entre ciclos - specs/tech/error-handling.md), `_engine` ficava
+    "envenenado" (nao-None) para sempre, mas `_risk_decisions` permanecia
+    `None` - toda chamada seguinte no MESMO processo pulava o bloco `if
+    _engine is None` e caia direto em `insert(_risk_decisions)` =
+    `insert(None)`, levantando `sqlalchemy.exc.ArgumentError: subject table
+    for an INSERT, UPDATE or DELETE expected, got None.` - uma mensagem que
+    nao aponta pra causa real (a falha transitoria original, ja resolvida
+    havia muito quando o sintoma aparece). Reproduzido isoladamente forcando
+    `MetaData.reflect` a falhar uma vez (`tests/unit/test_agent_ops_db.py`).
+    Corrigido usando variaveis locais durante a montagem: uma falha em
+    qualquer passo agora deixa `_engine`/`_risk_decisions` como se nada
+    tivesse acontecido, permitindo retry limpo no proximo ciclo."""
     global _engine, _risk_decisions
     if _engine is None:
-        _engine = create_engine(get_settings().agent_ops_database_url, pool_pre_ping=True)
+        engine = create_engine(get_settings().agent_ops_database_url, pool_pre_ping=True)
         metadata = MetaData()
-        metadata.reflect(bind=_engine, only=["risk_decisions"])
+        metadata.reflect(bind=engine, only=["risk_decisions"])
+        _engine = engine
         _risk_decisions = metadata.tables["risk_decisions"]
     return _engine
 
