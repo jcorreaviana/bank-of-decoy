@@ -99,7 +99,13 @@ def _current_retry_count(labels: list[str]) -> int:
     return 0
 
 
-def _handle_process_issue_failure(issue: Issue, exc: Exception, max_consecutive_failures: int) -> None:
+def _handle_process_issue_failure(
+    issue: Issue,
+    exc: Exception,
+    max_consecutive_failures: int,
+    repo_dir: str | None = None,
+    branch: str | None = None,
+) -> None:
     """Destino 3 do ciclo de vida pos-`assign_self`
     (specs/tech/error-handling.md): toda excecao nao prevista nos outros
     destinos precisa terminar em algo visivel na issue - nunca deixa-la
@@ -113,7 +119,31 @@ def _handle_process_issue_failure(issue: Issue, exc: Exception, max_consecutive_
     exigiria migration em outro servico (agent-ops-service) so para
     replicar um contador que o proprio GitHub ja hospeda nativamente, e sem
     o beneficio de ficar visivel na UI da issue para quem for investigar.
-    Mesmo padrao ja usado pelo gate (`needs-human-review`, gate.py)."""
+    Mesmo padrao ja usado pelo gate (`needs-human-review`, gate.py).
+
+    `repo_dir`/`branch` só chegam preenchidos quando `create_issue_branch`
+    já rodou com sucesso antes da falha (issue #78, mesmo tipo de gap que a
+    #65 fechou, por um caminho diferente: a #65 só cobriu a branch órfã no
+    destino 2/`_handle_no_action_needed`, nunca aqui no destino 3 - achado
+    real na #61 da janela de validação, onde uma falha genuína criava a
+    branch e falhava depois, e as tentativas seguintes da mesma issue
+    colidiam em `git checkout -b` com a branch órfã da tentativa anterior,
+    nunca chegando a rodar de verdade). A limpeza é melhor-esforço e não
+    pode mascarar `exc`: roda antes do reporte de falha abaixo, mas
+    qualquer exceção dela é só logada, nunca propagada no lugar da falha
+    real que motivou este destino."""
+    if repo_dir is not None and branch is not None:
+        try:
+            git_ops.delete_local_branch(repo_dir, branch)
+        except Exception:
+            logger.warning(
+                "Nao foi possivel limpar a branch local apos falha generica - "
+                "inofensivo para o reporte da falha real, so deixa a branch "
+                "orfa no clone ate limpeza manual.",
+                exc_info=True,
+                extra={"context": {"issue_number": issue.number, "branch": branch}},
+            )
+
     current_count = _current_retry_count(issue.labels)
     new_count = current_count + 1
 
@@ -239,6 +269,8 @@ def process_issue(issue: Issue) -> dict:
     )
     github_client.assign_self(issue.number)
 
+    repo_dir: str | None = None
+    branch: str | None = None
     try:
         repo_dir = git_ops.ensure_repo_cloned(settings.repo_url, settings.repo_clone_dir)
         branch = git_ops.create_issue_branch(repo_dir, issue.number)
@@ -305,7 +337,7 @@ def process_issue(issue: Issue) -> dict:
         }
     except Exception as exc:
         try:
-            _handle_process_issue_failure(issue, exc, settings.max_consecutive_failures)
+            _handle_process_issue_failure(issue, exc, settings.max_consecutive_failures, repo_dir, branch)
         except Exception:
             # Falha na propria limpeza (ex. `gh` indisponivel) e o pior caso
             # possivel para o contrato de specs/tech/error-handling.md - a

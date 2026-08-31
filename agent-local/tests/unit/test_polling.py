@@ -1,4 +1,5 @@
 import logging
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -475,6 +476,135 @@ def test_process_issue_escala_ao_atingir_teto_de_falhas_consecutivas() -> None:
     mock_add_label.assert_called_once_with(7, AGENT_STUCK_LABEL)
     mock_comment.assert_called_once()
     mock_unassign.assert_not_called()  # fica atribuida de proposito - e o que a mantem fora da fila
+
+
+def test_process_issue_falha_generica_apos_branch_criada_limpa_a_branch_orfa() -> None:
+    """Issue #78: mesmo tipo de achado que a #65 corrigiu (branch orfa
+    colidindo com uma reselecao seguinte da mesma issue), so que pelo
+    caminho de falha generica (destino 3) em vez do no-op (destino 2) que a
+    #65 cobriu. Uma falha real (ex. erro do SQLAlchemy, como na #61) depois
+    de `create_issue_branch` ja ter rodado com sucesso precisa limpar a
+    branch local - sem esconder nem substituir o erro real reportado na
+    issue."""
+    issue = _issue(number=61, labels=["bug"])
+    with (
+        patch("agent_local.polling.get_settings", return_value=_full_settings()),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", return_value="/tmp/repo"),
+        patch("agent_local.polling.git_ops.create_issue_branch", return_value="agent-local/issue-61"),
+        patch(
+            "agent_local.polling.invoke_sdk",
+            side_effect=RuntimeError("erro do SQLAlchemy: coluna inexistente"),
+        ),
+        patch("agent_local.polling.git_ops.delete_local_branch") as mock_delete_branch,
+        patch("agent_local.polling.github_client.add_issue_label") as mock_add_label,
+        patch("agent_local.polling.github_client.remove_issue_label"),
+        patch("agent_local.polling.github_client.comment_issue") as mock_comment,
+        patch("agent_local.polling.github_client.unassign_self"),
+    ):
+        with pytest.raises(RuntimeError, match="SQLAlchemy"):
+            process_issue(issue)
+
+    # A branch ja criada antes da falha precisa ser limpa - e o que evita a
+    # colisao de `git checkout -b` numa proxima tentativa da mesma issue.
+    mock_delete_branch.assert_called_once_with("/tmp/repo", "agent-local/issue-61")
+
+    # O erro real nao pode ser escondido nem substituido pela limpeza da branch.
+    mock_add_label.assert_called_once_with(61, "agent-retry-1")
+    assert "SQLAlchemy" in mock_comment.call_args.args[1]
+
+
+def test_process_issue_falha_antes_de_criar_branch_nao_tenta_limpar_branch() -> None:
+    """Caso limite do fix da #78: se a falha acontece ANTES de
+    `create_issue_branch` rodar (ex. `ensure_repo_cloned` falhando), nao ha
+    branch nenhuma para limpar - `delete_local_branch` nao deve ser
+    chamado."""
+    issue = _issue(number=62, labels=["bug"])
+    with (
+        patch("agent_local.polling.get_settings", return_value=_settings(max_consecutive_failures=3)),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", side_effect=RuntimeError("falha ao clonar")),
+        patch("agent_local.polling.git_ops.delete_local_branch") as mock_delete_branch,
+        patch("agent_local.polling.github_client.add_issue_label"),
+        patch("agent_local.polling.github_client.remove_issue_label"),
+        patch("agent_local.polling.github_client.comment_issue"),
+        patch("agent_local.polling.github_client.unassign_self"),
+    ):
+        with pytest.raises(RuntimeError):
+            process_issue(issue)
+
+    mock_delete_branch.assert_not_called()
+
+
+def _init_repo_local_e_remoto(path) -> str:
+    """Mesmo setup de `test_git_ops.py::_init_repo` - `create_issue_branch`
+    roda `git pull --ff-only` incondicionalmente, entao precisa de um
+    remote de verdade (bare, local) mesmo neste teste que nao mexe com
+    rede."""
+    remote_dir = str(path.parent / f"{path.name}-remote.git")
+    subprocess.run(["git", "init", "--bare", remote_dir], check=True)
+
+    repo_dir = str(path)
+    subprocess.run(["git", "init"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo_dir, check=True)
+    (path / "README.md").write_text("x", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "commit", "-m", "inicial"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "branch", "-M", "main"], cwd=repo_dir, check=True)
+    subprocess.run(["git", "remote", "add", "origin", remote_dir], cwd=repo_dir, check=True)
+    subprocess.run(["git", "push", "-u", "origin", "main"], cwd=repo_dir, check=True)
+    return repo_dir
+
+
+def test_reprocessamento_da_mesma_issue_apos_falha_generica_nao_colide_com_checkout(tmp_path) -> None:
+    """Reproducao de ponta a ponta do cenario exato da #61 (janela de
+    validacao): 1a tentativa tem uma falha genuina (aqui simulada via
+    `invoke_sdk`, como um erro real do SQLAlchemy) DEPOIS que
+    `create_issue_branch` ja rodou com sucesso. Sem a correcao da #78, a
+    branch orfa da 1a tentativa fazia a 2a tentativa da MESMA issue colidir
+    em `git checkout -b` (`already exists`) antes mesmo de chegar a rodar
+    de verdade - exatamente o sintoma que a #65 ja tinha corrigido, so que
+    por um caminho (destino 2) diferente do que causou a colisao aqui
+    (destino 3). So `git_ops.ensure_repo_cloned` e mockado (aponta pro
+    clone local de teste em vez de rede); `create_issue_branch` e
+    `delete_local_branch` rodam de verdade contra o repositorio real do
+    teste."""
+    repo_dir = _init_repo_local_e_remoto(tmp_path)
+    issue = _issue(number=61, labels=["bug"])
+
+    with (
+        patch("agent_local.polling.get_settings", return_value=_full_settings()),
+        patch("agent_local.polling.github_client.assign_self"),
+        patch("agent_local.polling.git_ops.ensure_repo_cloned", return_value=repo_dir),
+        patch(
+            "agent_local.polling.invoke_sdk",
+            side_effect=RuntimeError("erro do SQLAlchemy: coluna inexistente"),
+        ),
+        patch("agent_local.polling.github_client.add_issue_label"),
+        patch("agent_local.polling.github_client.remove_issue_label"),
+        patch("agent_local.polling.github_client.comment_issue"),
+        patch("agent_local.polling.github_client.unassign_self"),
+    ):
+        # 1a tentativa: falha genuina apos a branch ja ter sido criada.
+        with pytest.raises(RuntimeError, match="SQLAlchemy"):
+            process_issue(issue)
+
+        branch_name = "agent-local/issue-61"
+        branches_apos_1a_tentativa = subprocess.run(
+            ["git", "branch", "--format=%(refname:short)"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.split()
+        assert branch_name not in branches_apos_1a_tentativa
+
+        # 2a tentativa da MESMA issue: sem a correcao, `create_issue_branch`
+        # levantaria `CalledProcessError` (branch already exists) antes de
+        # `invoke_sdk` sequer ser chamado de novo.
+        with pytest.raises(RuntimeError, match="SQLAlchemy"):
+            process_issue(issue)
 
 
 def test_process_issue_propaga_excecao_original_mesmo_se_limpeza_falhar(caplog) -> None:
