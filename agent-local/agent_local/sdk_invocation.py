@@ -147,6 +147,45 @@ conhecidas por vazar (`CLAUDE_CODE_MESSAGING_SOCKET` etc.) - isso reabriria
 o mesmo buraco no dia em que uma variavel nova aparecer no ambiente."""
 
 
+_DISABLE_IDE_AUTO_CONNECT_ENV = {"CLAUDE_CODE_AUTO_CONNECT_IDE": "false"}
+"""Issue #86 - achado real durante a validacao de ciclo real da #76: um
+CANAL DE VAZAMENTO DE ISOLAMENTO DIFERENTE do que a #66 cobre. A #66
+corrigiu vazamento via VARIAVEIS DE AMBIENTE herdadas pelo subprocess
+(`_minimal_subprocess_env`/`_ALLOWED_ENV_PASSTHROUGH`, acima). Este e um
+mecanismo INDEPENDENTE: o CLI empacotado (`claude_agent_sdk/_bundled/
+claude.exe`) descobre sessoes de IDE ativas lendo arquivos de lock em
+`~/.claude/ide/*.lock` (`{"pid":..., "workspaceFolders":[...], ...}`,
+escritos por qualquer janela do VS Code aberta) - descoberta via SISTEMA
+DE ARQUIVOS, nao variavel de ambiente, entao `_ALLOWED_ENV_PASSTHROUGH`
+nao tem como bloquear (e nao da pra simplesmente remover `HOME`/
+`USERPROFILE` da lista para impedir a leitura desse diretorio - sao
+exigidos para a autenticacao, ver docstring do modulo).
+
+Reproduzido de forma deterministica: com uma janela do VS Code aberta em
+`c:\\study\\bank-of-decoy` (cenario comum durante desenvolvimento ativo -
+3 lock files distintos encontrados durante a investigacao real), o
+modelo tentou `Edit`/`Read` no `README.md` do repositorio REAL
+(`C:\\study\\bank-of-decoy\\README.md`) em vez do clone isolado passado
+via `cwd`, mesmo com `SystemMessage(subtype="init").data["cwd"]`
+reportando corretamente o clone isolado. O `Edit` foi negado pelo motor
+`dontAsk` nativo (`Edit(**)` da #74 funcionando como projetado - o
+caminho vazado cai fora do `cwd` isolado), mas o efeito colateral e o
+mesmo ja documentado para a #66/#74: o ciclo real do daemon terminou em
+`no_action_needed` falso (`diff_lines=0`), sem nenhuma issue de escopo
+resolvida de fato.
+
+`CLAUDE_CODE_AUTO_CONNECT_IDE=false` (flag encontrada lendo o bundle do
+CLI) desativa essa auto-conexao. Passado via `ClaudeAgentOptions(env=...)`
+- funciona aqui (ao contrario da tentativa original de whitelist so por
+`options.env`, ver docstring de `_ALLOWED_ENV_PASSTHROUGH` acima) porque
+esta e uma chave nova sendo ADICIONADA ao ambiente do subprocess, nao uma
+tentativa de restringir chaves ja herdadas - `{**inherited_env,
+**options.env}` sempre aplica esta sobrescrita por cima do que
+`_minimal_subprocess_env` deixar passar. Confirmado com o mesmo tipo de
+reproducao real: com esta opcao, `Edit`/`Read` resolveram corretamente
+contra o clone isolado, sem tocar o repositorio real."""
+
+
 @contextlib.contextmanager
 def _minimal_subprocess_env():
     """Reduz `os.environ` do processo chamador a `_ALLOWED_ENV_PASSTHROUGH`
@@ -392,6 +431,7 @@ def invoke_sdk(
         can_use_tool=_make_deny_out_of_scope_tools(cwd),
         max_turns=max_turns,
         cwd=cwd,
+        env=_DISABLE_IDE_AUTO_CONNECT_ENV,
     )
 
     async def _run() -> SDKInvocationResult:

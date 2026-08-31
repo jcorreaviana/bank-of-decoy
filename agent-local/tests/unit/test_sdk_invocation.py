@@ -9,6 +9,7 @@ from claude_agent_sdk import ResultMessage
 from agent_local.sdk_invocation import (
     ALLOWED_TOOLS,
     _ALLOWED_ENV_PASSTHROUGH,
+    _DISABLE_IDE_AUTO_CONNECT_ENV,
     _make_deny_out_of_scope_tools,
     _minimal_subprocess_env,
     build_task_prompt,
@@ -208,6 +209,37 @@ def test_invoke_sdk_usa_cwd_da_chamada_para_o_callback_de_permissao(tmp_path: Pa
     can_use_tool = captured_options["options"].can_use_tool
     result = anyio.run(can_use_tool, "Edit", {"file_path": str(outside_file)}, None)
     assert type(result).__name__ == "PermissionResultDeny"
+
+
+def test_invoke_sdk_desativa_auto_connect_de_ide() -> None:
+    """Issue #86 (achado durante a validacao de ciclo real da #76): sem
+    isso, uma janela de IDE (VS Code) com o repositorio real aberto faz o
+    CLI empacotado descobrir e conectar a essa sessao via
+    `~/.claude/ide/*.lock` (canal independente de variavel de ambiente
+    herdada, nao coberto por `_minimal_subprocess_env`/#66), fazendo
+    Read/Edit resolverem contra a working tree REAL em vez do cwd isolado
+    passado a invoke_sdk. Confirmado contra o SDK real: com
+    `env={"CLAUDE_CODE_AUTO_CONNECT_IDE": "false"}`, a edicao resolveu
+    corretamente contra o clone isolado."""
+    captured_options = {}
+
+    async def _spy_query(*, prompt, options):
+        captured_options["options"] = options
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s1",
+            total_cost_usd=0.0,
+            result="ok",
+        )
+
+    with patch("agent_local.sdk_invocation.query", _spy_query):
+        invoke_sdk("prompt", cwd=".", model="m", max_turns=1, timeout_seconds=5.0)
+
+    assert captured_options["options"].env == _DISABLE_IDE_AUTO_CONNECT_ENV
 
 
 def test_deny_bloqueia_ferramentas_fora_do_escopo() -> None:
