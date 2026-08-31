@@ -18,11 +18,25 @@ _risk_decisions: Table | None = None
 
 
 def _get_engine() -> Engine:
+    """So publica nos globais `_engine`/`_flagged_signals`/`_risk_decisions`
+    depois que `create_engine` + `reflect` tiverem os DOIS sucesso completo
+    (mesmo padrao aplicado em agent_local/agent_ops_db.py pela issue #61,
+    commit c19f764): a versao anterior atribuia `_engine` ANTES do
+    `reflect()`. Se o `reflect()` do PRIMEIRO uso da vida do processo
+    falhasse por qualquer motivo transitorio (o daemon roda em loop
+    continuo, nunca reinicia entre ciclos), `_engine` ficava "envenenado"
+    (nao-None) para sempre, mas `_flagged_signals`/`_risk_decisions`
+    permaneciam `None` - toda chamada seguinte no mesmo processo pulava o
+    bloco `if _engine is None` e caia direto em `select(None)`/`insert(None)`.
+    Corrigido usando variaveis locais durante a montagem: uma falha em
+    qualquer passo agora deixa os globais como se nada tivesse acontecido,
+    permitindo retry limpo no proximo ciclo (issue #90)."""
     global _engine, _flagged_signals, _risk_decisions
     if _engine is None:
-        _engine = create_engine(get_settings().agent_ops_database_url, pool_pre_ping=True)
+        engine = create_engine(get_settings().agent_ops_database_url, pool_pre_ping=True)
         metadata = MetaData()
-        metadata.reflect(bind=_engine, only=["flagged_signals", "risk_decisions"])
+        metadata.reflect(bind=engine, only=["flagged_signals", "risk_decisions"])
+        _engine = engine
         _flagged_signals = metadata.tables["flagged_signals"]
         _risk_decisions = metadata.tables["risk_decisions"]
     return _engine
