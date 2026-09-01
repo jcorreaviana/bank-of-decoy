@@ -192,6 +192,7 @@ def transferir_saldo(db: Session, payload: TransferenciaRequest) -> tuple[Accoun
             extra={
                 "context": {
                     "conta_origem_id": str(payload.conta_origem_id),
+                    "conta_destino_id": str(payload.conta_destino_id),
                     "saldo_disponivel": float(conta_origem.saldo),
                     "valor_solicitado": payload.valor,
                 }
