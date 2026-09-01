@@ -65,9 +65,6 @@ def create_transaction(db: Session, payload: TransactionCreateRequest) -> Transa
 
     conta_destino_id = uuid.UUID(pix_key_destino["account_id"])
 
-    agora = datetime.now(timezone.utc)
-    risk = evaluate_transaction_risk(db, payload, payload.account_id, agora=agora)
-
     logger.info(
         "Consultando account-service (chamada sincrona) para transferir saldo.",
         extra={"context": {"account_id": str(payload.account_id), "conta_destino_id": str(conta_destino_id)}},
@@ -80,6 +77,24 @@ def create_transaction(db: Session, payload: TransactionCreateRequest) -> Transa
             extra={"context": {"account_id": str(payload.account_id), "valor": payload.valor}},
         )
         raise SaldoInsuficienteError()
+
+    # issue #95 (latencia_alta): evaluate_transaction_risk roda 3 SELECTs
+    # (transaction_risk.py) na MESMA sessao de banco usada para o insert
+    # final - com SQLAlchemy autocommit=False, a primeira dessas queries faz
+    # o checkout de uma conexao do pool que so volta ao pool no commit() la
+    # embaixo. Antes desta correcao, a avaliacao de risco rodava ANTES da
+    # ultima chamada sincrona (transferir_saldo), entao a conexao ficava
+    # presa no pool do transaction-service durante toda a espera de rede
+    # dessa chamada (inclusive quando o account-service demora, ex.
+    # contencao do lock em SELECT ... FOR UPDATE de uma conta "quente"
+    # recebendo muitas transacoes). Sob carga concorrente, isso esgota o
+    # pool (tamanho default do SQLAlchemy) para QUALQUER outra requisicao em
+    # andamento, nao so a lenta - explica o p95 bem acima da mediana. Mover
+    # a avaliacao de risco para depois de todas as chamadas HTTP sincronas
+    # (e logo antes do insert/commit) minimiza a janela em que a conexao
+    # fica presa fora do pool.
+    agora = datetime.now(timezone.utc)
+    risk = evaluate_transaction_risk(db, payload, payload.account_id, agora=agora)
 
     e2e_id = uuid.uuid4()
     saida = Transaction(
