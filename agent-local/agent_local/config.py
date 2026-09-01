@@ -1,5 +1,16 @@
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Caminho derivado do proprio modulo (nao do cwd de quem inicia o daemon) -
+# mesmo principio ja usado em logging_config.py para _LOG_FILE. Sem isso, o
+# daemon so enxergava agent-local/.env se o operador exportasse cada
+# variavel manualmente no terminal antes de rodar `python -m
+# agent_local.polling` - inviavel sob uma Scheduled Task do Windows (issue
+# #81), que nao herda nenhuma variavel exportada numa sessao interativa.
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 @dataclass(frozen=True)
@@ -18,6 +29,10 @@ class Settings:
 
 
 def get_settings() -> Settings:
+    # `override=False` (default): uma variavel ja presente no ambiente do
+    # processo (ex. setada por um teste, ou persistida no registro do
+    # Windows) sempre vence o valor do .env, nunca o contrario.
+    load_dotenv(_ENV_FILE, override=False)
     return Settings(
         interval_seconds=int(os.environ.get("AGENT_LOCAL_INTERVAL_SECONDS", "300")),
         model=os.environ.get("AGENT_LOCAL_MODEL", "claude-sonnet-5"),

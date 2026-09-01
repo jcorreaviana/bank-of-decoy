@@ -129,6 +129,19 @@ Comportamento:
 
 Testes em `chaos-orchestrator/tests/` (`pytest`, sem precisar do ambiente Docker no ar — timeline exercitada com relógio falso, sem esperar minutos reais).
 
+### Cold start do ambiente de validação (issue #81)
+
+`scripts/cold_start.py` substitui a operação manual multi-terminal descrita nas seções abaixo (subir o compose acompanhando os logs manualmente, um terminal por serviço para aplicar migrations, dois terminais separados para os daemons tomando cuidado com ancestralidade de sessão IDE) por um único comando, idempotente e failfast — ver [specs/tech/cold-start.md](specs/tech/cold-start.md) para o design completo e o racional de cada decisão.
+
+```bash
+cd scripts
+python -m venv .venv && .venv/Scripts/pip install -r requirements.txt   # (ou .venv/bin/pip fora do Windows)
+
+scripts/.venv/Scripts/python.exe scripts/cold_start.py
+```
+
+Em ordem: sobe `docker-compose.test.yml`, espera health check real de cada componente (Postgres — os 5 bancos individualmente —, Kafka, Prometheus, Grafana, os 4 serviços de domínio), aplica as 5 migrations (cada uma de dentro da pasta do próprio serviço, nunca com cwd ambíguo — lição da issue #75), e inicia `agent-local`/`agent-preditivo` via Scheduled Task do Windows, que nasce sem nenhuma ancestralidade de sessão Claude Code/VS Code **por design** — não depende do operador lembrar da recomendação da próxima seção. `--skip-daemons`/`--skip-up`/`--skip-migrations`/`--no-build` permitem reaproveitar partes de uma execução anterior (mesma convenção do `validation_window.py` abaixo, que reusa a mesma lógica de subida/health-check/migrations).
+
 ### Janela de validação orgânica de 2h (issue #54)
 
 `scripts/validation_window.py` é o runbook operacional descrito em [specs/business/24-camada-caos-avancada.md](specs/business/24-camada-caos-avancada.md), seção "Execução orgânica" — sobe o ambiente **efêmero** (`docker-compose.test.yml`, não o principal: consistente com a decisão de v12/v16 do documento de escopo de não misturar tráfego sintético/caos com o dataset persistente de ML, e com a janela anterior já documentada em [docs/licoes-aprendidas-operacao-real.md](docs/licoes-aprendidas-operacao-real.md), que rodou contra o mesmo compose), aplica as migrations dos 5 bancos, inicia o gerador de tráfego sintético (`scripts/synthetic_traffic.py`) e o `chaos-orchestrator` em ciclos repetidos do cenário de cascata de exemplo, por um tempo de relógio configurável.
@@ -158,12 +171,16 @@ O que o script faz, em ordem:
 
 ### Lançando os daemons (`agent-local` / `agent-preditivo`)
 
+**Forma recomendada (issue #81): via `scripts/cold_start.py`** (seção acima) — os dois daemons nascem como Scheduled Task do Windows, sem nenhuma ancestralidade de sessão Claude Code/VS Code **por design**, não por disciplina do operador. Ver [specs/tech/cold-start.md](specs/tech/cold-start.md) para o design completo, e note o pré-requisito de `agent-preditivo/.env` (não existe até você criá-lo a partir de `.env.example`) para funcionalidade completa.
+
+Para depurar um daemon interativamente (não recomendado para uma janela de validação real):
+
 ```bash
 cd agent-local && .venv/Scripts/python.exe -m agent_local.polling      # loop continuo
 cd agent-preditivo && .venv/Scripts/python.exe -m agent_preditivo.polling
 ```
 
-**Não lance o daemon do `agent-local` como subtarefa em background de uma sessão interativa do Claude Code/VS Code** (achado real, issue #66 - vazamento de isolamento entre o subprocess do SDK e a working tree real do operador). O daemon herda o ambiente de processo de quem o lança; se o lançador for uma sessão interativa do Claude Code, variáveis que identificam essa sessão para o IDE (`CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN`/`CLAUDE_CODE_SESSION_ID`) são repassadas ao subprocess do Claude Agent SDK que `agent_local.sdk_invocation.invoke_sdk` invoca por issue - o CLI empacotado usa esse canal para se conectar à sessão IDE ativa, fazendo Read/Edit resolverem contra a workspace real aberta no VS Code em vez do clone isolado (`agent-local/workspace/bank-of-decoy`) passado via `cwd`. `sdk_invocation.py` já reduz o ambiente do subprocess a uma lista positiva de variáveis (`_minimal_subprocess_env`, issue #66) como correção primária - mas rodar o daemon a partir de um terminal/serviço limpo, sem essa ancestralidade, é defesa em profundidade: reduz a superfície de qualquer variável nova que amanhã carregue o mesmo tipo de canal ambiente, sem depender só da lista de `_ALLOWED_ENV_PASSTHROUGH` estar completa.
+**Não lance o daemon do `agent-local` como subtarefa em background de uma sessão interativa do Claude Code/VS Code** (achado real, issue #66 - vazamento de isolamento entre o subprocess do SDK e a working tree real do operador). O daemon herda o ambiente de processo de quem o lança; se o lançador for uma sessão interativa do Claude Code, variáveis que identificam essa sessão para o IDE (`CLAUDE_CODE_MESSAGING_SOCKET`/`CLAUDE_CODE_MESSAGING_TOKEN`/`CLAUDE_CODE_SESSION_ID`) são repassadas ao subprocess do Claude Agent SDK que `agent_local.sdk_invocation.invoke_sdk` invoca por issue - o CLI empacotado usa esse canal para se conectar à sessão IDE ativa, fazendo Read/Edit resolverem contra a workspace real aberta no VS Code em vez do clone isolado (`agent-local/workspace/bank-of-decoy`) passado via `cwd`. `sdk_invocation.py` já reduz o ambiente do subprocess a uma lista positiva de variáveis (`_minimal_subprocess_env`, issue #66) como correção primária - mas rodar o daemon a partir de um terminal/serviço limpo, sem essa ancestralidade, é defesa em profundidade: reduz a superfície de qualquer variável nova que amanhã carregue o mesmo tipo de canal ambiente, sem depender só da lista de `_ALLOWED_ENV_PASSTHROUGH` estar completa. A Scheduled Task da forma recomendada acima torna esse cuidado estrutural em vez de depender de lembrar dele a cada vez.
 
 Antes de confiar num lançamento novo do daemon (versão nova do `claude_agent_sdk`/CLI, forma diferente de iniciar o processo), rode o teste de regressão real de isolamento:
 

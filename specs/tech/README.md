@@ -12,3 +12,4 @@ Decisões técnicas que orientam a implementação de todos os microserviços do
 8. [messaging.md](messaging.md) — convenção de tópico Kafka, envelope de evento, idempotência.
 9. [security.md](security.md) — autenticação entre serviços, tratamento de PII, segredos.
 10. [infrastructure.md](infrastructure.md) — docker-compose local, portas dos serviços, variáveis de ambiente.
+11. [cold-start.md](cold-start.md) — automação do cold start do ambiente efêmero de validação, health check real por componente, isolamento estrutural dos daemons via Scheduled Task.

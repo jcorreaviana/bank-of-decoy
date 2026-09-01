@@ -1,5 +1,16 @@
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Caminho derivado do proprio modulo (nao do cwd de quem inicia o daemon) -
+# mesmo principio ja usado em logging_config.py para _LOG_FILE e replicado
+# de agent_local/config.py (issue #81). Sem isso, este daemon so enxergava
+# agent-preditivo/.env se o operador exportasse cada variavel manualmente
+# no terminal - inviavel sob uma Scheduled Task do Windows, que nao herda
+# nenhuma variavel exportada numa sessao interativa.
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 @dataclass(frozen=True)
@@ -28,6 +39,10 @@ def _api_base_urls() -> dict[str, str]:
 
 
 def get_settings() -> Settings:
+    # `override=False` (default): uma variavel ja presente no ambiente do
+    # processo (ex. setada por um teste, ou persistida no registro do
+    # Windows) sempre vence o valor do .env, nunca o contrario.
+    load_dotenv(_ENV_FILE, override=False)
     return Settings(
         interval_seconds=int(os.environ.get("PREDICTIVE_AGENT_INTERVAL_SECONDS", str(DEFAULT_INTERVAL_SECONDS))),
         prometheus_url=os.environ.get("PROMETHEUS_URL", "http://localhost:9090"),

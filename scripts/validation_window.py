@@ -64,6 +64,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+import environment_bootstrap as env_boot
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 CHAOS_ORCHESTRATOR_DIR = REPO_ROOT / "chaos-orchestrator"
@@ -71,30 +73,15 @@ AGENT_LOCAL_DIR = REPO_ROOT / "agent-local"
 DEFAULT_SCENARIO = CHAOS_ORCHESTRATOR_DIR / "scenarios" / "account_and_queue_cascade.yaml"
 DEFAULT_COMPOSE_FILE = REPO_ROOT / "docker-compose.test.yml"
 
-SERVICE_HEALTH_URLS = {
-    "onboarding-service": "http://localhost:8001/health",
-    "account-service": "http://localhost:8002/health",
-    "pix-key-service": "http://localhost:8003/health",
-    "transaction-service": "http://localhost:8004/health",
-}
-
-# {diretorio do componente: nome do banco} - `docker-compose.test.yml` so
-# cria os 5 bancos vazios (infra/postgres/init-databases.sh); o schema em
-# si depende de `alembic upgrade head` rodado por fora, achado real
-# documentado em docs/licoes-aprendidas-operacao-real.md ("Migrations nunca
-# tinham sido aplicadas no ambiente efemero recem-criado... isso nao
-# estava documentado em nenhum lugar do fluxo de subida"). Reproduzido de
-# novo no teste curto deste script (10 min): sem este passo, toda
-# requisicao do gerador de trafego falha com 500 (relation does not
-# exist) - silencioso o bastante para passar despercebido numa janela de
-# 2h inteira se nao for automatizado aqui.
-MIGRATION_SERVICES = {
-    "onboarding-service": "onboarding",
-    "account-service": "account",
-    "pix-key-service": "pix_key",
-    "transaction-service": "transaction",
-    "agent-ops-service": "agent_ops",
-}
+# Subida/health-check/migrations foram extraidos para
+# scripts/environment_bootstrap.py (issue #81), compartilhado com
+# scripts/cold_start.py - evita duplicar essa logica nos dois scripts e
+# arriscar divergencia com o tempo (mesmo racional de v11/v38 do documento
+# de escopo). `env_boot.build_default_health_checks()` cobre mais do que o
+# `SERVICE_HEALTH_URLS` de 4 entradas que existia so aqui antes desta
+# extracao - tambem confirma Postgres (os 5 bancos individualmente, nao so
+# o healthcheck generico do container), Kafka e Prometheus/Grafana, nao so
+# os 4 servicos de dominio.
 
 # Espelham agent_local.polling.CHAOS_ORIGIN_LABEL/AGENT_STUCK_LABEL - valor
 # duplicado aqui (nao importado) so para a busca `gh`/rotulagem textual;
@@ -266,31 +253,16 @@ def compute_pending_state(
 
 
 def wait_for_services_healthy(timeout_seconds: float = 180.0) -> None:
-    import httpx
-
-    deadline = time.monotonic() + timeout_seconds
-    pending = dict(SERVICE_HEALTH_URLS)
-    while pending and time.monotonic() < deadline:
-        for service, url in list(pending.items()):
-            try:
-                resp = httpx.get(url, timeout=3.0)
-                if resp.status_code == 200:
-                    pending.pop(service)
-                    log("servico_saudavel", servico=service)
-            except httpx.HTTPError:
-                pass
-        if pending:
-            time.sleep(3.0)
-    if pending:
-        raise SystemExit(f"Servicos nao ficaram saudaveis a tempo: {sorted(pending)}")
+    env_boot.wait_for_healthy(
+        env_boot.build_default_health_checks(),
+        timeout_seconds=timeout_seconds,
+        on_healthy=lambda name: log("componente_saudavel", componente=name),
+    )
 
 
 def docker_compose_up(compose_file: Path, *, build: bool) -> None:
-    args = ["docker", "compose", "-f", str(compose_file), "up", "-d"]
-    if build:
-        args.append("--build")
     log("subindo_ambiente", compose_file=str(compose_file), build=build)
-    subprocess.run(args, cwd=REPO_ROOT, check=True)
+    env_boot.docker_compose_up(compose_file, build=build)
 
 
 def run_migrations() -> None:
@@ -298,12 +270,10 @@ def run_migrations() -> None:
     aplicada) - seguro rodar em todo start da janela, mesmo contra o
     ambiente principal persistente (onde so a primeira execucao faz
     algo)."""
-    for service_dir, db_name in MIGRATION_SERVICES.items():
-        component_dir = REPO_ROOT / service_dir
-        python = _venv_python(component_dir)
-        env = {**os.environ, "DATABASE_URL": f"postgresql://bank:bank@localhost:5432/{db_name}"}
-        log("aplicando_migrations", servico=service_dir, banco=db_name)
-        subprocess.run([str(python), "-m", "alembic", "upgrade", "head"], cwd=component_dir, env=env, check=True)
+    env_boot.run_migrations(
+        env_boot.migration_commands(),
+        on_start=lambda cmd: log("aplicando_migrations", servico=cmd.service_dir, banco=cmd.database),
+    )
 
 
 def start_traffic_generator(
