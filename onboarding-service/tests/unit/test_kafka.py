@@ -97,3 +97,18 @@ def test_publish_events_sem_eventos_nao_produz_nem_flusha():
 
     producer.produce.assert_not_called()
     producer.flush.assert_not_called()
+
+
+def test_delivery_callback_loga_key_em_caso_de_falha(caplog):
+    """Issue #99: sem a key (onboarding_id usado como chave de particionamento,
+    ver onboarding_events.py) no log de falha de entrega, e impossivel saber
+    qual onboarding especifico teve o evento nao entregue so pelo log."""
+    msg = MagicMock()
+    msg.topic.return_value = "onboarding.aprovado"
+    msg.key.return_value = b"onboarding-123"
+
+    with caplog.at_level("ERROR"):
+        kafka._delivery_callback("erro simulado", msg)
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].context["key"] == "onboarding-123"

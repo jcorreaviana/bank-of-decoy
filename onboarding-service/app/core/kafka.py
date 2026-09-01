@@ -34,9 +34,16 @@ def get_producer() -> Producer:
 
 def _delivery_callback(err, msg) -> None:
     if err is not None:
+        key = msg.key()
         logger.error(
             "Falha na entrega do evento Kafka.",
-            extra={"context": {"topic": msg.topic(), "error": str(err)}},
+            extra={
+                "context": {
+                    "topic": msg.topic(),
+                    "key": key.decode("utf-8") if key else None,
+                    "error": str(err),
+                }
+            },
         )
 
 
