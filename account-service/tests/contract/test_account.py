@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from unittest.mock import Mock, patch
@@ -149,6 +150,35 @@ def test_post_account_onboarding_service_unexpected_error_returns_500() -> None:
 
     assert response.status_code == 500
     assert response.json()["error_code"] == "INTERNAL_ERROR"
+
+
+def test_post_account_onboarding_service_unexpected_error_logs_response_body(caplog) -> None:
+    """Issue #100: o log de 'Resposta inesperada do onboarding-service.'
+    precisa incluir o corpo da resposta (response_body), nao so o
+    status_code - ao contrario do caminho de erro de rede (httpx.HTTPError),
+    que ja registrava `error`, este log ficava menos informativo."""
+    client = TestClient(app, raise_server_exceptions=False)
+    server_error = httpx.Response(
+        502,
+        json={
+            "error_code": "INTERNAL_ERROR",
+            "message": "onboarding-service instavel",
+            "field": None,
+            "trace_id": "y",
+        },
+    )
+
+    with _patch_onboarding_get(server_error):
+        with caplog.at_level(logging.ERROR):
+            response = client.post("/v1/accounts", json={"onboarding_id": str(uuid.uuid4()), "tipo_conta": "corrente"})
+
+    assert response.status_code == 500
+
+    matching_records = [
+        record for record in caplog.records if record.getMessage() == "Resposta inesperada do onboarding-service."
+    ]
+    assert len(matching_records) == 1
+    assert "onboarding-service instavel" in matching_records[0].context["response_body"]
 
 
 def test_get_account_happy_path_returns_status() -> None:

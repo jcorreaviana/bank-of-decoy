@@ -64,6 +64,7 @@ def fetch_onboarding_internal(onboarding_id: str, trace_id: str = "") -> dict:
                     "target_url": url,
                     "onboarding_id": onboarding_id,
                     "status_code": response.status_code,
+                    "response_body": response.text[:200],
                 }
             },
         )
