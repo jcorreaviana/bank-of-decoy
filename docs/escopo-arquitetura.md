@@ -97,6 +97,11 @@
 - **v62** (#61): causa raiz investigada e corrigida para a falha genuína da 1ª tentativa da issue #61 (`docs/relatorio-janela-fase2b.md`, seção 10) — a única das três nunca explicada (as tentativas 2/3 já eram a colisão mecânica de branch órfã, corrigida pela #78/v57). Sem traceback completo disponível (o `daemon.log` do dia do incidente não tinha sido gravado em arquivo ainda — só corrigido depois pela #79/v59), a investigação partiu do texto exato do erro (`sqlalchemy.exc.ArgumentError: subject table for an INSERT, UPDATE or DELETE expected, got None.`) e de busca exaustiva por toda construção Core `insert`/`update`/`delete` alcançável a partir de `process_issue` — código de `pix-key-service` (o alvo da issue) não tem nenhuma: só usa ORM (`select`, `session.add`/`flush`). A única construção alcançável é `insert(_risk_decisions)` em `agent_local/agent_ops_db.py::record_risk_decision`. Reproduzido isoladamente (`tests/unit/test_agent_ops_db.py`): `_get_engine()` atribuía o global `_engine` **antes** de `metadata.reflect()` confirmar sucesso — uma falha transitória (rede, outage momentâneo do Postgres) no primeiro `reflect()` da vida do processo (o daemon roda em loop contínuo, nunca reinicia entre ciclos) deixava `_engine` "envenenado" (não-`None`) para sempre, mas `_risk_decisions` preso em `None`; toda chamada seguinte a `record_risk_decision()` no mesmo processo pulava o bloco de inicialização e caía direto em `insert(None)`, produzindo exatamente o erro reportado — sem nenhuma relação com o código de `pix-key-service` que o agente estava tentando corrigir. Confirma a moldura correta do achado: bug real na infraestrutura própria do `agent-local` (auditoria em `risk_decisions`), não no fix que o modelo tentou aplicar. Corrigido usando variáveis locais durante a montagem de `_get_engine()`, só publicando nos globais depois que `create_engine`+`reflect` tiverem sucesso completo — uma falha em qualquer passo agora deixa o estado como se nada tivesse acontecido, permitindo retry limpo no próximo ciclo em vez de envenenamento permanente. Teste de regressão novo força o primeiro `reflect()` a falhar e confirma que uma tentativa seguinte, no mesmo processo, se recupera normalmente. Validado contra o Postgres real (`docker-compose`, database `agent_ops`) — suíte completa de `agent-local/tests/unit` (99 testes) passando. O mesmo padrão de inicialização lazy (`_engine` atribuído antes do reflect) existe em `agent_preditivo/agent_ops_db.py::register_signal`/`find_open_signal` — fora do escopo da #61 (não foi a causa desta falha, já que `agent-local` não importa esse módulo), mas é candidato natural de issue de acompanhamento pelo mesmo risco. Issue #61 não fechada automaticamente — fix commitado com `refs #61`, fechamento manual via `/fecha-issue` pendente.
 - **v63** (#90): candidato de acompanhamento apontado pela v62/#61 confirmado e corrigido — `agent_preditivo/agent_ops_db.py::_get_engine()` tinha o mesmo padrão estrutural de envenenamento permanente já corrigido em `agent_local/agent_ops_db.py` pela #61/commit `c19f764`: `_engine` era atribuído **antes** de `metadata.reflect()` confirmar sucesso, deixando `_flagged_signals`/`_risk_decisions` presos em `None` para sempre caso o primeiro `reflect()` da vida do processo falhasse por qualquer motivo transitório — toda chamada seguinte a `register_signal()`/`find_open_signal()`/`list_open_signals()` no mesmo processo (o daemon roda em loop contínuo) cairia em `select(None)`/`insert(None)`. Confirmado por leitura direta do código (não só por semelhança de nome de arquivo) antes de aplicar a correção. Corrigido com o mesmo padrão da #61: variáveis locais durante toda a montagem (`create_engine` + `reflect`), só publicando nos globais depois que ambos os passos tiverem sucesso completo. Teste de regressão novo em `agent-preditivo/tests/unit/test_agent_ops_db.py` (mesmo padrão do teste da #61, adaptado para exercitar `register_signal`/`find_open_signal` — os métodos que o agente preditivo de fato usa, já que ele não grava em `risk_decisions` hoje): força o primeiro `reflect()` a falhar e confirma que uma tentativa seguinte, no mesmo processo, se recupera normalmente; confirmado que o teste falha contra o código antigo (revertendo o fix temporariamente) e passa com a correção. Validado contra o Postgres real (`docker-compose`, database `agent_ops`) — suíte completa de `agent-preditivo/tests/unit` (84 testes) passando. Issue #90 não fechada automaticamente — fix commitado com `refs #90`, fechamento manual via `/fecha-issue` pendente.
 - **v64** (#81): cold start do ambiente de validação automatizado por completo — spec nova, `specs/tech/cold-start.md` (11ª spec técnica transversal). `scripts/cold_start.py` substitui a operação manual multi-terminal documentada até aqui (subir o compose acompanhando os logs manualmente, um terminal por serviço para migrations, dois terminais separados para os daemons cuidando manualmente da ancestralidade de sessão IDE) por um único comando failfast. A lógica de subida/health-check/migrations foi extraída de `scripts/validation_window.py` (issue #54) para `scripts/environment_bootstrap.py`, compartilhado entre os dois scripts — `validation_window.py` foi refatorado para reusá-la em vez de manter cópia própria (evita divergência futura, mesmo racional de v11/v38).
+- **v65**: diagrama Mermaid da seção "Arquitetura de agentes" atualizado para refletir o estado real do sistema — o desenho anterior era explicitamente o design inicial da Fase 3-4, nunca revisado depois da implementação e das 3 janelas de validação real. Achados principais que motivaram a atualização (levantados por comparação direta contra o código, não por suposição, durante a janela de validação `docs/relatorio-janela-fase2b-rerun.md`):
+  - `agent-preditivo` é **1 daemon/processo único** (`polling.py::run_cycle`, loop a cada 300s chamando `run_bug_cycle`/`run_opportunity_cycle` em sequência) — o desenho original sugeria dois "agentes remotos" separados (Modelo A/Modelo B) como se fossem entidades independentes; na prática, `registration_agent.py` é um módulo chamado dentro do mesmo ciclo, embora faça sua própria chamada LLM com system prompt distinto.
+  - Achado novo (issue #103, aberta durante a investigação de um vazamento de isolamento real na janela de rerun): `registration_agent.py::_commit_and_push_spec` faz **commit + `git push origin main` direto**, sem PR nem gate nenhum, toda vez que uma oportunidade é registrada (specs/business/\*.md) — e `opportunity_detection.py::save_scenario_journey` faz o mesmo, sem condicionar a dedup, para `tests/scenarios/*.md`. Assimetria real e antes não documentada no diagrama: `agent-preditivo` escreve livre em `main`, enquanto `agent-local` passa por clone isolado + score de risco + gate antes de qualquer merge.
+  - Componentes reais que nunca apareceram no diagrama anterior, agora representados: `chaos-orchestrator` (cenários YAML, `POST /internal/chaos/config` nos 4 serviços), Discord (webhooks de notificação de evento), Grafana (dashboards, consumindo do mesmo Prometheus), Kafka (evento `onboarding.aprovado` + DLT), `cold_start.py`/Scheduled Tasks do Windows (isolamento estrutural dos daemons como filhos de `svchost.exe`, não da sessão que os lançou), e os 4 microsserviços de domínio como nós individuais com seu tier de criticidade (`SERVICE_CRITICALITY` em `agent_preditivo/registration_agent.py`: crítico = transaction/pix-key, alto = account/onboarding).
+  - Os 4 desfechos reais do ciclo de vida pós-`assign_self` do `agent-local` (`specs/tech/error-handling.md`, "3 destinos" + o próprio gate de risco) agora aparecem todos: `autonomo` (merge automático), `humano` (PR + `needs-human-review`), `no_action_needed` (sem diff, fecha sem PR) e `agent-stuck` (falha após N tentativas consecutivas) — o desenho original só mostrava os dois primeiros, os únicos previstos no design inicial antes de #40/#41 existirem.
 
   Health check real (nunca sleep fixo) para os 9 componentes exigidos pela issue: os 5 bancos Postgres checados individualmente via `psycopg2`/`SELECT 1` (inclusive `agent_ops` — não é container HTTP próprio, `agent-ops-service/` só tem migrations, mas o check real equivalente é a conexão direta no banco; mais correto que confiar só no healthcheck nativo do container Postgres, que não garante que os 5 bancos de domínio foram de fato criados por `infra/postgres/init-databases.sh`), os 4 serviços de domínio via `/health`, Kafka via conexão TCP na porta do listener exposto ao host, Prometheus via `/-/ready`, Grafana via `/api/health`. Decisão registrada na spec: checks do lado do host em Python, não `healthcheck:` nativo no compose — evita depender de `curl`/`wget` estarem disponíveis dentro de imagens de terceiros (Kafka/Prometheus/Grafana, nenhuma controlada por este projeto) e reusa o padrão já validado em produção por `validation_window.py`. Migrations aplicadas com `cwd=pasta-do-próprio-serviço` (nunca a raiz do repo) para cada um dos 5 serviços — lição da issue #75 generalizada além do escopo original (cwd ambíguo entre script e subcomando).
 
@@ -329,80 +334,127 @@ Racional: reduzir ambiguidade de interpretação antes de cada implementação (
 
 ## Arquitetura de agentes (Fase 3-4)
 
-Desenho inicial dos três agentes, com abordagem diferenciada por responsabilidade (não um framework único para os três):
+Desenho inicial dos três agentes, com abordagem diferenciada por responsabilidade (não um framework único para os três) — **substituído abaixo pela versão atualizada pós-Fase 2b/janelas de validação** (v65), que reflete a arquitetura real observada em operação, não mais o desenho inicial.
 
 ```mermaid
 flowchart TB
 
-    subgraph INFRA["Infraestrutura (roda por trás)"]
+    subgraph DOMINIO["Domínio PIX (4 microsserviços)"]
+        direction TB
+        ONB["onboarding-service<br/>tier: alto"]
+        ACC["account-service<br/>tier: alto"]
+        PIX["pix-key-service<br/>tier: crítico"]
+        TRANS["transaction-service<br/>tier: crítico"]
+        KAFKA["Kafka<br/>onboarding.aprovado + DLT"]
+        DOMDB[("Postgres<br/>4 databases de domínio")]
+    end
+
+    subgraph INFRA["Infraestrutura e observabilidade"]
         direction TB
         PROM["Prometheus<br/>golden signals"]
+        GRAFANA["Grafana<br/>dashboards"]
         LOGS["Logs estruturados<br/>JSON"]
+        DISCORD["Discord<br/>webhooks de evento"]
         OLLAMA["Ollama local<br/>llama3.2:3b"]
-        SPECS["specs/business/<br/>(RAG)"]
-        TESTENV["Ambiente efêmero<br/>docker-compose.test.yml"]
-        DB[("Postgres<br/>4 databases de domínio")]
-        AGENTDB[("agent_ops<br/>flagged_signals<br/>risk_decisions")]
+        AGENTDB[("agent_ops<br/>flagged_signals<br/>risk_decisions<br/>(sem API própria)")]
+        CHAOS["chaos-orchestrator<br/>cenários YAML<br/>POST /internal/chaos/config"]
+        COLDSTART["cold_start.py<br/>+ Scheduled Tasks (Windows)<br/>daemons filhos de svchost.exe"]
     end
 
-    subgraph REMOTO["Agentes remotos (GitHub)"]
+    subgraph PREDITIVO["agent-preditivo (1 daemon, 1 processo)"]
         direction TB
-        A["Agente preditivo<br/>(Modelo A)<br/>classifica: bug | oportunidade"]
-        B["Agente de registro<br/>(Modelo B)<br/>mesmo modelo, system prompt<br/>técnico ou de negócio"]
-        ISSUE_BUG["Issue: label bug<br/>template bug-report.md"]
-        ISSUE_BIZ["Issue: label business-story<br/>template business-story.md"]
+        CYCLE["run_cycle<br/>loop a cada 300s"]
+        BUGCYCLE["run_bug_cycle<br/>chamada LLM própria"]
+        OPPCYCLE["run_opportunity_cycle<br/>chamada LLM própria<br/>(system prompt de negócio)"]
+        REGISTER["registration_agent<br/>gera spec + issue"]
+        PUSHMAIN["commit + git push origin main<br/>DIRETO, sem PR/gate<br/>(specs/business/*.md,<br/>tests/scenarios/*.md — issue #103)"]
+    end
+
+    subgraph GH["GitHub (único ponto de integração real)"]
+        direction TB
+        ISSUES["Issues API<br/>(gh issue list/create)"]
         BOARD["GitHub Project<br/>Auto-add to project"]
+        MAIN[["branch main"]]
     end
 
-    subgraph LOCAL["Agente local (Claude Code SDK)"]
+    subgraph LOCAL["agent-local (1 daemon, clone isolado)"]
         direction TB
-        POLL["Polling próprio<br/>issues sem assignee"]
-        CHECK["Verifica dependências<br/>auto-atribui issue"]
-        IMPL["Clona repo, cria branch<br/>implementa via Claude Code SDK"]
-        TEST["Roda testes<br/>calcula cobertura + diff"]
-        SCORE["Score de risco<br/>(código, não LLM)<br/>lê campos da issue"]
-        GATE{"Score abaixo<br/>do threshold?"}
-        AUTOMERGE["Aprova e faz merge<br/>sozinho (gh pr merge)"]
-        HUMAN["PR aberto<br/>label needs-human-review<br/>aguarda revisão"]
+        POLL["Polling via Issues API<br/>(não via board)"]
+        CHECK["Checagem de dependência<br/>(string match no corpo)"]
+        CLONE["Clone isolado<br/>agent-local/workspace/<br/>git pull --ff-only de main"]
+        IMPL["Implementa via<br/>Claude Agent SDK"]
+        TESTRUN["Roda testes contra<br/>banco de teste descartável<br/>(TESTING=true)"]
+        SCORE["Score de risco<br/>(código, não LLM)"]
+        GATE{"Score abaixo<br/>do threshold<br/>do tier?"}
+        AUTOMERGE["autonomo<br/>merge automático"]
+        HUMAN["humano<br/>PR + needs-human-review"]
+        NOACTION["no_action_needed<br/>sem diff, fecha sem PR"]
+        STUCK["agent-stuck<br/>falha após N tentativas"]
     end
 
-    PROM --> A
-    LOGS --> A
-    SPECS -. RAG .-> A
-    TESTENV -. bateria de cenários .-> A
-    AGENTDB -. dedup de sinais .-> A
-    SCORE -. registra decisão .-> AGENTDB
+    PROM --> CYCLE
+    LOGS --> CYCLE
+    CHAOS -. "GET /internal/chaos/status<br/>(dedup chaos-test)" .-> CYCLE
+    AGENTDB -. "dedup de sinais" .-> CYCLE
+    OLLAMA -.-> BUGCYCLE
+    OLLAMA -.-> OPPCYCLE
+    CYCLE --> BUGCYCLE
+    CYCLE --> OPPCYCLE
+    BUGCYCLE --> REGISTER
+    OPPCYCLE --> REGISTER
+    REGISTER --> PUSHMAIN
+    PUSHMAIN --> MAIN
+    REGISTER --> ISSUES
+    ISSUES --> BOARD
+    CYCLE -. notifica .-> DISCORD
 
-    A -- "bug" --> B
-    A -- "oportunidade<br/>+ jornada mapeada" --> B
-    OLLAMA -.-> A
-    OLLAMA -.-> B
-
-    B --> ISSUE_BUG
-    B --> ISSUE_BIZ
-    ISSUE_BUG --> BOARD
-    ISSUE_BIZ --> BOARD
-
-    BOARD -.-> POLL
+    ISSUES --> POLL
     POLL --> CHECK
-    CHECK --> IMPL
-    IMPL --> TEST
-    TEST --> SCORE
+    CHECK --> CLONE
+    CLONE -.-> MAIN
+    CLONE --> IMPL
+    IMPL --> TESTRUN
+    TESTRUN --> SCORE
+    SCORE -. "registra decisão" .-> AGENTDB
     SCORE --> GATE
     GATE -- "sim" --> AUTOMERGE
     GATE -- "não" --> HUMAN
+    IMPL -. "diff_lines == 0" .-> NOACTION
+    IMPL -. "falha genérica" .-> STUCK
     AUTOMERGE -. atualiza .-> BOARD
     HUMAN -. atualiza .-> BOARD
-    IMPL -.-> DB
+    AUTOMERGE -. notifica .-> DISCORD
+    HUMAN -. notifica .-> DISCORD
+    STUCK -. notifica .-> DISCORD
 
+    CHAOS --> ONB
+    CHAOS --> ACC
+    CHAOS --> PIX
+    CHAOS --> TRANS
+    ONB --> KAFKA
+    KAFKA --> ACC
+    ONB & ACC & PIX & TRANS --> DOMDB
+    ONB & ACC & PIX & TRANS -. métricas .-> PROM
+    PROM --> GRAFANA
+
+    COLDSTART -. sobe .-> DOMINIO
+    COLDSTART -. "isola por design<br/>(não por disciplina)" .-> CYCLE
+    COLDSTART -. "isola por design<br/>(não por disciplina)" .-> POLL
+
+    classDef dominio fill:#1f3a2a,stroke:#4a9a6a,color:#e0f5e5
     classDef infra fill:#2d2d3a,stroke:#6b6b8a,color:#e0e0f0
-    classDef remoto fill:#1f3a3a,stroke:#4a9a9a,color:#e0f5f5
+    classDef preditivo fill:#1f3a3a,stroke:#4a9a9a,color:#e0f5f5
+    classDef gh fill:#3a3a1f,stroke:#9a9a4a,color:#f5f5e0
     classDef local fill:#3a2a1f,stroke:#c98a4a,color:#f5e5d5
     classDef gate fill:#4a1f1f,stroke:#c94a4a,color:#f5d5d5
+    classDef risco fill:#4a1f3a,stroke:#c94a9a,color:#f5d5e5
 
-    class PROM,LOGS,OLLAMA,SPECS,TESTENV,DB,AGENTDB infra
-    class A,B,ISSUE_BUG,ISSUE_BIZ,BOARD remoto
-    class POLL,CHECK,IMPL,TEST,SCORE,AUTOMERGE,HUMAN local
+    class ONB,ACC,PIX,TRANS,KAFKA,DOMDB dominio
+    class PROM,GRAFANA,LOGS,DISCORD,OLLAMA,AGENTDB,CHAOS,COLDSTART infra
+    class CYCLE,BUGCYCLE,OPPCYCLE,REGISTER preditivo
+    class PUSHMAIN risco
+    class ISSUES,BOARD,MAIN gh
+    class POLL,CHECK,CLONE,IMPL,TESTRUN,SCORE,AUTOMERGE,HUMAN,NOACTION,STUCK local
     class GATE gate
 ```
 
